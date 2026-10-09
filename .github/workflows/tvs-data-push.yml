@@ -1,0 +1,99 @@
+name: TVS Daily Data Push
+
+on:
+  schedule:
+    # Nominal fire time 22:00 UTC (03:30 AM IST). Observed GitHub Actions
+    # scheduled-trigger queue lag on this repo runs ~5 hours, so this is a
+    # fallback safety net — the primary trigger is a local launchd job on
+    # this Mac (~/Library/LaunchAgents/com.tvsldr.dailytrigger.plist) that
+    # fires workflow_dispatch (which starts instantly, unlike `schedule`)
+    # at 10:30 AM IST daily, with an automatic retry on failure.
+    - cron: "0 22 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run — fetch, process and validate but do NOT publish'
+        type: boolean
+        default: false
+
+concurrency:
+  group: tvs-data-push
+  cancel-in-progress: false  # never cancel a running push; queue instead
+
+jobs:
+  push-data:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60        # Apps Script fetch + processing should complete well within 1 hour
+    permissions:
+      contents: write         # needed for the keep-alive commit and data file
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests pandas openpyxl pyxlsb
+
+      - name: Download historical cache
+        run: |
+          gh release download v1-data \
+            --repo ${{ github.repository_owner }}/TVS-LDR-HistData \
+            --pattern "hist_cache.json.gz" \
+            --dir TVS/
+          echo "hist_cache size: $(du -sh TVS/hist_cache.json.gz)"
+        env:
+          GH_TOKEN: ${{ secrets.HIST_DATA_PAT }}
+
+      - name: Download live archive (closed months)
+        continue-on-error: true
+        run: |
+          gh release download live-archive \
+            --repo ${{ github.repository_owner }}/TVS-LDR-HistData \
+            --pattern "live_archive.json.gz" \
+            --dir TVS/ || echo "No live archive yet (first run) — it will be created"
+          # Optional one-off retail backfill (CSV export of an older retail-sheet version), if present
+          gh release download live-archive \
+            --repo ${{ github.repository_owner }}/TVS-LDR-HistData \
+            --pattern "retail_seed.csv.gz" \
+            --dir TVS/ 2>/dev/null || echo "No retail seed asset (normal)"
+        env:
+          GH_TOKEN: ${{ secrets.HIST_DATA_PAT }}
+
+      - name: Run data push
+        run: python TVS/push_tvs_data.py ${{ inputs.dry_run == true && '--dry-run' || '' }}
+        env:
+          TVS_PUSH_SECRET: ${{ secrets.TVS_PUSH_SECRET }}
+
+      - name: Upload live archive (closed months)
+        if: ${{ inputs.dry_run != true }}
+        continue-on-error: true
+        run: |
+          [ -f TVS/live_archive.json.gz ] || { echo "No archive produced — nothing to upload"; exit 0; }
+          gh release view live-archive --repo ${{ github.repository_owner }}/TVS-LDR-HistData >/dev/null 2>&1 || \
+            gh release create live-archive --repo ${{ github.repository_owner }}/TVS-LDR-HistData \
+              --title "Live archive" --notes "Per-lead rows of live months, kept so a month is never lost when it rolls out of the 3 rolling Drive sheets. Private; overwritten daily by the pipeline."
+          gh release upload live-archive TVS/live_archive.json.gz \
+            --repo ${{ github.repository_owner }}/TVS-LDR-HistData --clobber
+          echo "live archive size: $(du -sh TVS/live_archive.json.gz)"
+        env:
+          GH_TOKEN: ${{ secrets.HIST_DATA_PAT }}
+
+      - name: Keep repo active
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          echo "Last run: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" > last_run.txt
+          git add last_run.txt
+          git add data/tvs_payload.json.gz 2>/dev/null || true
+          git add data/tvs_payload_prev.json.gz 2>/dev/null || true
+          git add TVS/source_metrics.json 2>/dev/null || true
+          git add TVS/unknown_model_diagnostic.json 2>/dev/null || true
+          git rm --cached data/tvs_payload.json 2>/dev/null || true
+          git diff --cached --quiet || git commit -m "chore: pipeline run $(date -u '+%Y-%m-%d')"
+          git pull --rebase
+          git push
