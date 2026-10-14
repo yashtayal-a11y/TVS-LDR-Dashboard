@@ -38,7 +38,7 @@ MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov'
 
 import os
 
-APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwdTKif3l3gYJKMwZBO6PjmYgNbWulkQ9TMEIsN-6xMdG2efbndnSoHE4tC63Oe6AKmlQ/exec"
+APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyfbjJ9EK6FAmIaw27wycAb7_cE92-yqT8DT91MyhVvyKF7xQUu_Pq4PIQZp98Jdj97/exec"
 SECRET = os.environ.get("TVS_PUSH_SECRET", "")
 
 RETAILS_FILE_ID = '1ZWBlzxX-g2R5iCcrsGUWrqSvxIHcchFHtajDDPcFJgE'
