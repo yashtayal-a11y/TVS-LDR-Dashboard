@@ -2481,6 +2481,26 @@ def build_payload(all_leads, retail_map):
 
     city_state_arr = [city_to_state.get(i) for i in range(len(city_arr))]
 
+    # Day-on-Day hygiene. A daily split is only meaningful where the day is a real creation day.
+    # History months before Jul'26 have no CreateDate, and from Feb'26 their lead ids are stamped in
+    # 10-day blocks (YYMM01/11/21/31), so only a handful of "days" exist. Such months are collapsed into the
+    # undated bucket (YYYYMM00) and the tab shows "daily detail not available" for them.
+    _dd_days = {}
+    for _k in dd:
+        _d = int(_k.split('|', 1)[0])
+        if _d % 100: _dd_days.setdefault(_d // 100, set()).add(_d % 100)
+    _dd_collapse = sorted(ym for ym, s in _dd_days.items() if ym < 202607 and len(s) <= 12)
+    if _dd_collapse:
+        _dd_new = {}
+        for _k, _v in dd.items():
+            _p = _k.split('|'); _d = int(_p[0])
+            if _d // 100 in _dd_collapse and _d % 100: _p[0] = str((_d // 100) * 100)
+            _kk = '|'.join(_p)
+            _e = _dd_new.setdefault(_kk, [0, 0, 0, 0])
+            for _j in range(4): _e[_j] += _v[_j]
+        dd = _dd_new
+        print(f"Day-on-Day: months without a usable daily date (collapsed to undated): {_dd_collapse}", flush=True)
+
     maps_payload = {
         'lm': lm_arr, 'src': src_arr, 'lt': lt_arr, 'mdl': mdl_arr,
         'st': st_arr, 'zone': zone_arr, 'city': city_arr,

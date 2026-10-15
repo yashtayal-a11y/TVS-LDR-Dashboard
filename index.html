@@ -3720,19 +3720,38 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT }) {
     exportXlsx({ ['Day on Day ' + sel]: aoa }, 'TVS_DayOnDay_' + sel.replace("'", ''));
   };
 
-  return ce('div', { className: 'fade-up' },
-    ce('div', { style: { fontSize: 12, color: '#64748B', marginBottom: 14, padding: '8px 12px', background: '#F8FAFC', borderRadius: 8, border: '1px solid #E2E8F0' } },
-      '📅 Leads are counted on the day they were created; retails are attributed to that creation day (so recent days keep converting and their L2R% rises). ' +
-      'Model, Source and Lead Type filters apply' + (filtersNA ? ' — State, City and Purchased Model filters do not apply to this tab' : '') + '. This tab ignores the On Create / On Update toggle.'),
-    ce('div', { className: 'card', style: { padding: '12px 18px', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' } },
+  const navCard = (withExport) => ce('div', { className: 'card', style: { padding: '12px 18px', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' } },
       ce('div', { className: 'fs-10', style: { fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '.06em' } }, 'Month'),
       navBtn('◀', idx >= opts.length - 1, () => setSel(opts[idx + 1])),
       ce('select', { value: sel, onChange: e => setSel(e.target.value),
         style: { fontSize: 13, fontWeight: 700, padding: '5px 10px', borderRadius: 8, border: '1px solid #CBD5E1', background: '#fff', color: '#0f172a', fontFamily: 'inherit' } },
         opts.map(m => ce('option', { key: m, value: m }, m))),
       navBtn('▶', idx <= 0, () => setSel(opts[idx - 1])),
-      ce('div', { style: { marginLeft: 'auto' } }, ce(ExportBtn, { onClick: exportData }))
-    ),
+      ce('div', { style: { marginLeft: 'auto' } }, withExport ? ce(ExportBtn, { onClick: exportData }) : null)
+    );
+
+  const noteBar = ce('div', { style: { fontSize: 12, color: '#64748B', marginBottom: 14, padding: '8px 12px', background: '#F8FAFC', borderRadius: 8, border: '1px solid #E2E8F0' } },
+      '📅 Leads are counted on the day they were created; retails are attributed to that creation day (so recent days keep converting and their L2R% rises). ' +
+      'Model, Source and Lead Type filters apply' + (filtersNA ? ' — State, City and Purchased Model filters do not apply to this tab' : '') + '. This tab ignores the On Create / On Update toggle.');
+
+  if (view.last === 0) {
+    const noSplit = view.uL > 0;
+    return ce('div', { className: 'fade-up' }, noteBar, navCard(false),
+      ce('div', { className: 'card', style: { padding: '40px 24px', textAlign: 'center', color: '#64748B' } },
+        ce('div', { className: 'fs-32', style: { marginBottom: 10 } }, noSplit ? '🗓️' : '🔎'),
+        ce('div', { className: 'fs-14', style: { fontWeight: 700, color: '#334155', marginBottom: 6 } },
+          noSplit ? 'Daily detail is not available for ' + sel : 'No leads for this selection in ' + sel),
+        noSplit
+          ? ce('div', { className: 'fs-12', style: { maxWidth: 560, margin: '0 auto', lineHeight: 1.5 } },
+              'The source data for this month records only the lead month, not the day each lead was created. ' +
+              'For the selected filters the month total is ' + Nf(view.uL) + ' leads and ' + Nf(view.uR) + ' retails. ' +
+              "Apr'25 – Jan'26 and Jul'26 onwards have full daily detail.")
+          : ce('div', { className: 'fs-12' }, 'Try widening the Model, Source or Lead Type filters.')));
+  }
+
+  return ce('div', { className: 'fade-up' },
+    noteBar,
+    navCard(true),
     ce('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(175px,1fr))', gap: 10, marginBottom: 20 } },
       KPIs.map((k, i) => ce('div', { key: i, className: 'kpi' },
         ce('div', { style: { position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: k.color, borderRadius: '12px 12px 0 0' } }),
