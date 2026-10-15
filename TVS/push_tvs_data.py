@@ -2165,6 +2165,45 @@ def load_hist_retail_map():
 
 # ─── Core aggregation ─────────────────────────────────────────────────────────
 
+_MON_NUM = {'Jan':1,'Feb':2,'Mar':3,'Apr':4,'May':5,'Jun':6,'Jul':7,'Aug':8,'Sep':9,'Oct':10,'Nov':11,'Dec':12}
+
+def lead_day(lid, lm, cd):
+    """Day-on-Day dimension: the lead's creation day as an int YYYYMMDD.
+
+    Always constrained to the lead's own LeadMonth, so daily totals add up to the monthly totals.
+      1. The sheet's CreateDate (live months, Jul'26+): the proxy delivers it as a plain IST date.
+         NB: lead ids are NOT usable as a daily date in live months - they are stamped in
+         10-day blocks (YYMM01 / YYMM11 / YYMM21 / YYMM31).
+      2. History months (before Jul'26) carry no CreateDate, but their lead ids embed the
+         creation date as YYMMDD, so the id is used there.
+      3. Otherwise YYYYMM00, i.e. "undated" within that month.
+    Returns 0 when the lead month itself cannot be parsed.
+    """
+    try:
+        mon, yy = lm.split("'")
+        ym = (2000 + int(yy)) * 100 + _MON_NUM[mon]
+    except Exception:
+        return 0
+    c = str(cd or '')[:10]
+    if len(c) == 10 and c[4] == '-' and c[7] == '-' and (c[:4] + c[5:7]).isdigit() and int(c[:4] + c[5:7]) == ym:
+        try:
+            datetime(int(c[:4]), int(c[5:7]), int(c[8:10]))
+            return int(c[:4]) * 10000 + int(c[5:7]) * 100 + int(c[8:10])
+        except ValueError:
+            pass
+    if ym < 202607:
+        s = str(lid)
+        if len(s) >= 6 and s[:6].isdigit():
+            iy, im, idd = 2000 + int(s[0:2]), int(s[2:4]), int(s[4:6])
+            if iy * 100 + im == ym:
+                try:
+                    datetime(iy, im, idd)
+                    return iy * 10000 + im * 100 + idd
+                except ValueError:
+                    pass
+    return ym * 100
+
+
 def build_payload(all_leads, retail_map):
     dl_col = 'DealerName' if 'DealerName' in all_leads.columns else None
 
@@ -2193,6 +2232,8 @@ def build_payload(all_leads, retail_map):
     disp_mdl_idx, disp_mdl_arr = {}, []   # separate dimension: Retail Dispersion family names
     pmr,  u_pmr  = {}, {}   # purch_model × enq_model × src × month → [R, R_dms, R_co] (retails only)
     cdm, csm, cdsm = {},{},{}
+    dd = {}                 # Day-on-Day: lead-creation day x model x source x lead-type -> [L, R, R_dms, R_co]
+    _dd_undated = 0
     dl_sn = {}  # city × dealer × lead-month → [L_open, L_booking, L_lost]
     # Granular Status_Name funnel: status × source × city × model × lead-month → count.
     # Populated ONLY when a row carries a non-blank Status_Name — in practice that means
@@ -2320,6 +2361,9 @@ def build_payload(all_leads, retail_map):
         bump(cxsm,    f"{cti}|{si}|{mi}|{li}", is_ret, rtype)
         bump(stcm,    f"{sti}|{cti}|{li}",  is_ret, rtype)
         bump(univ,    f"{mi}|{si}|{sti}|{tti}|{li}", is_ret, rtype)
+        _dday = lead_day(lid, lm, _cds[i])
+        if _dday % 100 == 0: _dd_undated += 1
+        bump(dd, f"{_dday}|{mi}|{si}|{tti}", is_ret, rtype)
 
         _raw_sn = _norm_sn(_sns[i]) if _sns[i] else ''
         if _raw_sn:
@@ -2462,6 +2506,8 @@ def build_payload(all_leads, retail_map):
         'sm':      to_rows(sm,  lambda k: list(map(int, k.split('|')))),
         'ltm':     to_rows(ltm, lambda k: list(map(int, k.split('|')))),
         'mm':      to_rows(mm,  lambda k: list(map(int, k.split('|')))),
+        # [day YYYYMMDD (YYYYMM00 = undated), model_idx, src_idx, lt_idx, L, R, R_dms, R_co]
+        'dd':      to_rows(dd,  lambda k: list(map(int, k.split('|')))),
         'stm':     to_rows(stm, lambda k: list(map(int, k.split('|')))),
         'mxst':    to_rows(mxst,  lambda k: list(map(int, k.split('|')))),
         'mlt':     to_rows(mlt,   lambda k: list(map(int, k.split('|')))),
@@ -2515,6 +2561,9 @@ def build_payload(all_leads, retail_map):
     print(f"Ageing: retails={_ram_total:,}  valid={_ram_valid:,}  "
           f"no_rd={_ram_no_rd:,}  no_cd={_ram_no_cd:,}  neg={_ram_neg:,}  "
           f"ram_rows={len(ram):,}", flush=True)
+    _dd_L = sum(v[0] for v in dd.values()); _mo_L = sum(v[0] for v in monthly.values())
+    print(f"Day-on-Day: dd_rows={len(dd):,}  leads={_dd_L:,} (monthly leads={_mo_L:,}"
+          f"{'' if _dd_L == _mo_L else '  ** MISMATCH **'})  undated={_dd_undated:,}", flush=True)
     return payload
 
 # ─── Pipeline guard functions (defined here so every stage can call them) ─────
