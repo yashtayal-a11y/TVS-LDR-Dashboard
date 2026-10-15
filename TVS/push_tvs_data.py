@@ -1133,9 +1133,7 @@ def normalize_purchased_model(pm):
     if 'IQUBE' in pu or 'IQUE' in pu:                            return 'TVS iQube'
     if 'RONIN' in pu:                                             return 'TVS Ronin'
     if 'RADEON' in pu:                                            return 'TVS Radeon'
-    if 'ORBITER' in pu:
-        _unk_mdl_reasons[pm] = 'ORBITER'
-        return 'Unknown'
+    if 'ORBITER' in pu or 'U546' in pu:                           return 'TVS Orbiter'
     if 'SPORT' in pu and 'TVS' not in pu.replace('TVS SPORT',''):return 'TVS Sport'
     if 'SPORT' in pu:                                             return 'TVS Sport'
     if 'XL 100' in pu or 'XL100' in pu:                          return 'TVS XL100'
