@@ -4443,14 +4443,14 @@ const DispersionTab = React.memo(function DispersionTab({ data, filters, months,
         if (!modelAcc.has(eMdl)) modelAcc.set(eMdl, { same:0, cross:0 });
         const e = modelAcc.get(eMdl);
         for (const [pi, cnt] of piMap) {
-          if (maps.mdl[pi] === eMdl) e.same+=cnt; else e.cross+=cnt;
+          if (dlm[pi] !== 'Unknown' && dlm[pi] === mdl_disp[ei]) e.same+=cnt; else e.cross+=cnt;
         }
       }
     }
     return [...modelAcc.entries()]
       .map(([m, e]) => ({ m, same:e.same, cross:e.cross, total:e.same+e.cross, disp:e.same+e.cross>0?e.cross/(e.same+e.cross)*100:0 }))
       .sort((a,b)=>b.total-a.total);
-  }, [byMonth, maps]);
+  }, [byMonth, maps, dlm, mdl_disp]);
 
   return ce('div', { className:'fade-up' },
     ce('div', { style:{fontSize:12,color:'#64748B',marginBottom:14,padding:'8px 12px',background:'#F8FAFC',borderRadius:8,border:'1px solid #E2E8F0'} },
