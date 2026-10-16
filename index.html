@@ -3594,9 +3594,6 @@ const ModelPerfTab = React.memo(function ModelPerfTab({ data, filters, months, R
   );
 });
 
-/* ════════════════════════════════════════════════════════════════════
-   APP ROOT
-   ════════════════════════════════════════════════════════════════════ */
 ﻿/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    DAY ON DAY TAB  â€” leads per lead-creation day; retails stacked DMS / VOC (Call Out)
    On Create : retails of the leads created that day (data.dd  = [day, mdl, src, lt, L, R, R_dms, R_co])
@@ -3714,10 +3711,11 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
 
   const filtersNA = [(filters.states && filters.states.size), (filters.cities && filters.cities.size), (filters.purchasedModels && filters.purchasedModels.size)].some(n => n > 0);
 
+  const noDayLabel = upd ? 'Attributed outside month (month-close)' : 'No day recorded';
   const exportData = () => {
     const aoa = [['Date', 'Day', 'Leads (created)', 'Retail DMS', 'Retail VOC (Call Out)', 'Total Retail', 'L2R%']];
     for (const x of view.shown) aoa.push([x.d + ' ' + MONTHS[view.mon - 1] + ' ' + view.year, x.wd, x.l, x.rd, x.rc, x.r, +x.l2r.toFixed(2)]);
-    if (view.uL > 0 || view.uR > 0) aoa.push(['No day recorded', '', view.uL, view.nRd, view.nRc, view.uR, '']);
+    if (view.uL > 0 || view.uR > 0) aoa.push([noDayLabel, '', view.uL, view.nRd, view.nRc, view.uR, '']);
     aoa.push(['âˆ‘ Total', '', view.tL, view.tRd, view.tRc, view.tR, +view.l2r.toFixed(2)]);
     exportXlsx({ ['Day on Day ' + sel + (upd ? ' OU' : ' OC')]: aoa }, 'TVS_DayOnDay_' + sel.replace("'", '') + (upd ? '_OnUpdate' : '_OnCreate'));
   };
@@ -3807,7 +3805,7 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
               ce('td', { style: { fontWeight: 700 } }, Nf(x.r)),
               ce('td', null, x.l > 0 ? Pf(x.l2r) : 'â€”'))),
             (view.uL > 0 || view.uR > 0) && ce('tr', { key: 'noday' },
-              ce('td', { className: 'label', style: { color: '#94A3B8' } }, 'No day recorded'),
+              ce('td', { className: 'label', style: { color: '#94A3B8' } }, noDayLabel),
               ce('td', null, Nf(view.uL)),
               ce('td', { style: { color: '#E31837', fontWeight: 700 } }, Nf(view.nRd)),
               ce('td', { style: { color: '#7C3AED', fontWeight: 700 } }, Nf(view.nRc)),
@@ -3824,7 +3822,9 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
         )
       ),
       (view.uL > 0 || view.uR > 0) && ce('div', { style: { marginTop: 8, fontSize: 11, color: '#94A3B8' } },
-        '"No day recorded" holds leads and retails whose source has no usable date for this month; they are included in the totals so the month ties to the Overview.')
+        (upd
+          ? '"' + noDayLabel + '" holds retails whose attribution date falls in the neighbouring month — mostly DMS retails dated the 1st of the next month, which the Overview credits to this month (month-close) — plus any without a day. They are included in the total so the month ties to the Overview.'
+          : '"No day recorded" holds leads and retails whose source has no usable date for this month; they are included in the totals so the month ties to the Overview.'))
     )
   );
 });
