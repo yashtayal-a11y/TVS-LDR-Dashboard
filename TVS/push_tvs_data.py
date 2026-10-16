@@ -1964,6 +1964,7 @@ def build_retail_map(retail_df, rd_map=None):
     unexpected_ct = []
     has_ct = 'Call Type' in retail_df.columns
     has_pm = 'performanceMonth' in retail_df.columns
+    has_ra = 'Retail_Attribution_Date' in retail_df.columns
     for _, row in retail_df.iterrows():
         lid = to_id(row.get('sourceLeadId', ''))
         if not lid: continue
@@ -1984,7 +1985,8 @@ def build_retail_map(retail_df, rd_map=None):
             rtype = 'DMS'
         rmap[lid] = {'rm': rm, 'rtype': rtype, 'pm': pm,
                      'rd': rd_map.get(lid) if rd_map else None,
-                     'ad': _day_int(row.get('performanceMonth', '')) if has_pm else None}
+                     # attribution day: Retail_Attribution_Date (performanceMonth is a month-start stamp for DMS rows)
+                     'ar': _day_int(row.get('Retail_Attribution_Date', '')) if has_ra else None}
     return rmap, unexpected_ct
 
 def make_synthetic_leads(retail_df, matched_lids):
@@ -2256,6 +2258,7 @@ def build_payload(all_leads, retail_map):
     _dd_undated = 0
     ddu = {}                # Day-on-Day, retail side (On Update): retail ATTRIBUTION day x model x source x lead-type -> [R, R_dms, R_co]
     _ddu_undated = 0
+    _ddu_outside = 0
     dl_sn = {}  # city × dealer × lead-month → [L_open, L_booking, L_lost]
     # Granular Status_Name funnel: status × source × city × model × lead-month → count.
     # Populated ONLY when a row carries a non-blank Status_Name — in practice that means
@@ -2390,9 +2393,11 @@ def build_payload(all_leads, retail_map):
             # On Update: the retail is counted on the day it was attributed (performanceMonth date), inside its retail month.
             _ri  = retail_map[lid]
             _uym = _label_ym(_ri.get('rm', '') or lm)
-            _uad = _ri.get('ad')
+            _uad = _ri.get('ar')
             _uday = _uad if (_uad and _uad // 100 == _uym) else _uym * 100
-            if _uday % 100 == 0: _ddu_undated += 1
+            if _uday % 100 == 0:
+                _ddu_undated += 1
+                if _uad: _ddu_outside += 1      # a day exists but lies outside the retail month
             _ue = ddu.setdefault(f"{_uday}|{mi}|{si}|{tti}", [0, 0, 0])
             _ue[0] += 1
             _rtu = rtype.upper()
@@ -2622,7 +2627,7 @@ def build_payload(all_leads, retail_map):
           f"{'' if _dd_L == _mo_L else '  ** MISMATCH **'})  undated={_dd_undated:,}", flush=True)
     _ddu_R = sum(v[0] for v in ddu.values()); _u_R = sum(v[1] for v in u_monthly.values())
     print(f"Day-on-Day (On Update retails): ddu_rows={len(ddu):,}  retails={_ddu_R:,} (u_monthly retails={_u_R:,}"
-          f"{'' if _ddu_R == _u_R else '  ** MISMATCH **'})  no-day={_ddu_undated:,}", flush=True)
+          f"{'' if _ddu_R == _u_R else '  ** MISMATCH **'})  no-day={_ddu_undated:,} (of which day outside retail month={_ddu_outside:,})", flush=True)
     return payload
 
 # ─── Pipeline guard functions (defined here so every stage can call them) ─────
@@ -2868,7 +2873,7 @@ def _apply_live_archive(lead_dfs, rtype_map, archive):
 
 
 def _slim_retail(info):
-    return {k: info.get(k) for k in ('rm', 'rtype', 'pm', 'ad') if info.get(k) is not None}
+    return {k: info.get(k) for k in ('rm', 'rtype', 'pm', 'ar') if info.get(k) is not None}
 
 
 def _merge_retail_archive(online_rmap):
@@ -3322,7 +3327,7 @@ for lid, info in online_rmap.items():
         # Case B — keep rtype, update rm if valid; always propagate rd for ageing
         live_rd = info.get('rd')
         if live_rm and live_rm_order >= LEAD_MASTER_START_ORDER:
-            retail_map[lid] = {**retail_map[lid], 'rm': live_rm, 'rd': live_rd, 'ad': info.get('ad')}
+            retail_map[lid] = {**retail_map[lid], 'rm': live_rm, 'rd': live_rd, 'ar': info.get('ar')}
             _updated_rm += 1
         else:
             if live_rd is not None:
