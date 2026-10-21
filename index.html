@@ -620,6 +620,25 @@ function pmOverrideLRDedup(getLR, pmMap, ri, keyFn) {
 function Nf(n) { return (n == null || isNaN(n)) ? '—' : Number(n).toLocaleString('en-IN'); }
 function Pf(n, d=1) { return (n == null || isNaN(n) || n===0) ? '—' : n.toFixed(d) + '%'; }
 
+// The pipeline stamps data.t in UTC WITHOUT a zone marker. Read it as UTC and always show it in IST,
+// whatever time zone the viewer's browser is in.
+function _syncDate(t) {
+  if (!t) return null;
+  const s = String(t);
+  const d = new Date(/(Z|[+-]\d\d:?\d\d)$/.test(s) ? s : s + 'Z');
+  return isNaN(d.getTime()) ? null : d;
+}
+function fmtSyncIST(t) {
+  const d = _syncDate(t);
+  return d ? d.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) + ' IST' : '\u2014';
+}
+function fmtDateIST(t) {
+  const d = _syncDate(t);
+  if (!d) return '\u2014';
+  const x = new Date(d.getTime() + 19800000);   // IST = UTC+5:30
+  return String(x.getUTCDate()).padStart(2, '0') + ' ' + MONTHS[x.getUTCMonth()] + ' ' + x.getUTCFullYear();
+}
+
 function SummaryBar({ kpis }) {
   if (!kpis || kpis.length === 0) return null;
   return ce('div', {
@@ -4046,7 +4065,7 @@ function App() {
   // ── Dashboard (full / viewer) ──────────────────────────────────────
   const syncChip = data && ce('div', {
     className:'fs-10',style:{color:'#64748B',background:'#F0F4FF',padding:'2px 10px',borderRadius:20,fontFamily:'DM Mono'}
-  }, 'Synced: ' + (data.t ? new Date(data.t).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}) : '—'));
+  }, 'Synced: ' + (data.t ? fmtSyncIST(data.t) : '—'));
 
   const userChip = ce('div', { className:'user-chip' },
     ce('div', { className:'user-avatar' }, auth.email[0].toUpperCase()),
@@ -4141,8 +4160,7 @@ function App() {
             { label:'L2R%',        value: headerKpis.leads > 0 ? headerKpis.l2r.toFixed(1)+'%' : '—' },
             { label:'RETAIL TILL', value: (() => {
                 if (!data || !data.t) return '—';
-                const d = new Date(data.t);
-                return String(d.getDate()).padStart(2,'0') + ' ' + MONTHS[d.getMonth()] + ' ' + d.getFullYear();
+                return fmtDateIST(data.t);
               })() },
           ].map((k, idx) => ce(React.Fragment, { key:k.label },
             idx > 0 && ce('div', { style:{width:1,height:32,background:'rgba(255,255,255,.25)',margin:'0 20px'} }),
