@@ -2259,6 +2259,11 @@ def build_payload(all_leads, retail_map):
     ddu = {}                # Day-on-Day, retail side (On Update): retail ATTRIBUTION day x model x source x lead-type -> [R, R_dms, R_co]
     _ddu_undated = 0
     _ddu_outside = 0
+    # Admin "Day on Day" detail file (data/tvs_daily.json.gz): the last 4 lead months at full granularity
+    # (day x model x source x lead-type x state x city; retails also x purchased model), loaded on demand.
+    _dfm = set(sorted({_label_ym(_x.strip()) for _x in set(_lms) if _x and _x.strip()} - {0})[-4:])
+    dly_L = {}    # (lead day, mi, si, lt, st, city) -> leads
+    dly_R = {}    # (lead day, retail day, mi, si, lt, st, city, purchased model, 0=DMS/1=CallOut/2=other) -> retails
     dl_sn = {}  # city × dealer × lead-month → [L_open, L_booking, L_lost]
     # Granular Status_Name funnel: status × source × city × model × lead-month → count.
     # Populated ONLY when a row carries a non-blank Status_Name — in practice that means
@@ -2389,6 +2394,9 @@ def build_payload(all_leads, retail_map):
         _dday = lead_day(lid, lm, _cds[i])
         if _dday % 100 == 0: _dd_undated += 1
         bump(dd, f"{_dday}|{mi}|{si}|{tti}|{sti}", is_ret, rtype)
+        if (_dday // 100) in _dfm:
+            _lk = (_dday, mi, si, tti, sti, cti)
+            dly_L[_lk] = dly_L.get(_lk, 0) + 1
         if is_ret:
             # On Update: the retail is counted on the day it was attributed (performanceMonth date), inside its retail month.
             _ri  = retail_map[lid]
@@ -2460,6 +2468,10 @@ def build_payload(all_leads, retail_map):
             raw_pm = retail_map[lid].get('pm', '') or ''
             pm  = normalize_purchased_model(raw_pm) or 'Unknown'
             pmi = ix(mdl_idx, mdl_arr, pm)        # canonical purchased model (for pmr)
+            if (_dday // 100) in _dfm or (_uday // 100) in _dfm:
+                _rtd = rtype.upper()
+                _rk = (_dday, _uday, mi, si, tti, sti, cti, pmi, 0 if 'DMS' in _rtd else (1 if 'CALL' in _rtd else 2))
+                dly_R[_rk] = dly_R.get(_rk, 0) + 1
             # Retail Dispersion uses a separate standardisation: exact RETAIL_DISPERSION_MAP
             dm  = normalize_disp_model(raw_pm)
             dmi = ix(disp_mdl_idx, disp_mdl_arr, dm)
@@ -2557,8 +2569,23 @@ def build_payload(all_leads, retail_map):
         maps_payload['dl'] = dl_arr
         print(f"Dealers: {len(dl_arr):,}  City×Dealer×Month rows: {len(cdm):,}", flush=True)
 
+    _t_now = pd.Timestamp.now().isoformat()
+    _lk_ = sorted(dly_L); _rk_ = sorted(dly_R)
+    _daily = {
+        't': _t_now,
+        'months': sorted(_dfm),
+        'maps': {'mdl': mdl_arr, 'src': src_arr, 'lt': lt_arr, 'st': st_arr, 'city': city_arr},
+        'L': {n: [k[i] for k in _lk_] for i, n in enumerate(('d', 'mi', 'si', 'lt', 'st', 'ci'))},
+        'R': {n: [k[i] for k in _rk_] for i, n in enumerate(('cd', 'ud', 'mi', 'si', 'lt', 'st', 'ci', 'pm', 'rt'))},
+    }
+    _daily['L']['n'] = [dly_L[k] for k in _lk_]
+    _daily['R']['n'] = [dly_R[k] for k in _rk_]
+    print(f"Daily detail file: months={sorted(_dfm)}  lead rows={len(_lk_):,}  retail rows={len(_rk_):,}  "
+          f"leads={sum(dly_L.values()):,}  retails={sum(dly_R.values()):,}", flush=True)
+
     payload = {
-        't':       pd.Timestamp.now().isoformat(),
+        't':       _t_now,
+        '_daily':  _daily,     # popped before serialisation; written as data/tvs_daily.json.gz
         'rt_cols': 1,
         'maps':    maps_payload,
         'monthly': to_rows(monthly, lambda k: [int(k)]),
@@ -3739,6 +3766,7 @@ def _validate_payload(p):
     return oc_by_lm, ou_by_lm
 
 _oc, _ou = _validate_payload(payload)
+_daily_payload = payload.pop('_daily', None)
 
 # ─── Staging → Validate → Promote ─────────────────────────────────────────────
 # ATOMICITY GUARANTEE: production is NEVER overwritten until Firebase confirms OK.
@@ -3951,6 +3979,14 @@ if _prev_existed:
     print(f"  Backed up previous → {_prev_path.name}", flush=True)
 
 shutil.move(str(_staging_path), str(_prod_path))
+try:
+    if _daily_payload:
+        _daily_path = _data_dir / 'tvs_daily.json.gz'
+        with gzip.open(_daily_path, 'wt', encoding='utf-8', compresslevel=6) as _f:
+            json.dump(_daily_payload, _f, separators=(',', ':'))
+        print(f"  Daily detail       → {_daily_path.name}  ({_daily_path.stat().st_size // 1024:,} KB)", flush=True)
+except Exception as _dly_err:
+    print(f"  WARNING: daily detail file not written ({_dly_err}); Day on Day falls back to the basic table", flush=True)
 print(f"  Promoted staging   → {_prod_path.name}  ({_prod_path.stat().st_size // 1024:,} KB)",
       flush=True)
 

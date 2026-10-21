@@ -45,6 +45,7 @@ jobs:
           cp index.html _site/index.html
           cp _site/index.html _site/404.html
           [ -f data/tvs_payload.json.gz ] && { mkdir -p _site/data && cp data/tvs_payload.json.gz _site/data/tvs_payload.json.gz; } || echo "TVS data not yet available, skipping"
+          [ -f data/tvs_daily.json.gz ] && { mkdir -p _site/data && cp data/tvs_daily.json.gz _site/data/tvs_daily.json.gz; } || echo "Daily detail not available, skipping"
 
       - name: Setup Pages
         uses: actions/configure-pages@v4

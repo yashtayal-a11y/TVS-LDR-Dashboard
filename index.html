@@ -3570,6 +3570,27 @@ const ModelPerfTab = React.memo(function ModelPerfTab({ data, filters, months, R
    day = YYYYMMDD ; YYYYMM00 = "no day recorded" for that month (kept so month totals always reconcile).
    State / City / Purchased-model filters do not exist in these tables.
    ════════════════════════════════════════════════════════════════════ */
+let _dailyPromise = null;
+function loadDailyDetail() {
+  if (!_dailyPromise) {
+    _dailyPromise = fetch('./data/tvs_daily.json.gz', { cache: 'no-store' }).then(async resp => {
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const reader = resp.body.pipeThrough(new DecompressionStream('gzip')).getReader();
+      const chunks = [];
+      while (true) { const { done, value } = await reader.read(); if (done) break; chunks.push(value); }
+      return JSON.parse(await new Blob(chunks).text());
+    }).catch(() => { _dailyPromise = null; return null; });
+  }
+  return _dailyPromise;
+}
+
+// "▲ 12.3%" / "▼ 4.0 pp" for the month-to-date comparison (null when it cannot be computed).
+function fmtDelta(v, unit) {
+  if (v == null || !isFinite(v)) return null;
+  const a = Math.abs(v).toFixed(1);
+  return { up: v >= 0, txt: (v >= 0 ? '▲ +' : '▼ −') + a + unit };
+}
+
 const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leadsMode }) {
   const { maps } = data;
   const dd  = data.dd  || [];
@@ -3586,41 +3607,98 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
   useEffect(() => { if (opts.length && !opts.includes(sel)) setSel(opts[0]); }, [opts]);
   const idx = opts.indexOf(sel);
 
+  // Full-granularity daily detail (city / purchased model) for the latest 4 months, loaded on demand (admin tab only).
+  const [daily, setDaily] = useState(null);
+  useEffect(() => {
+    let live = true;
+    loadDailyDetail().then(d => { if (live) setDaily(d && d.t === data.t ? d : false); });
+    return () => { live = false; };
+  }, [data.t]);
+  const dx = useMemo(() => (daily ? { ...daily, cityName: daily.maps.city.map(c => canonicalCity(c)) } : null), [daily]);
+
   const view = useMemo(() => {
     const mt = (sel || '').match(/([A-Za-z]+)'(\d+)/);
-    if (!mt || !dd.length) return null;
+    if (!mt) return null;
     const year = 2000 + parseInt(mt[2], 10), mon = MONTHS.indexOf(mt[1]) + 1;
     if (mon < 1) return null;
     const ym = year * 100 + mon, dim = new Date(year, mon, 0).getDate();
-    const allMdl = !filters.models    || filters.models.size    === 0;
-    const allSrc = !filters.sources   || filters.sources.size   === 0;
-    const allLT  = !filters.leadTypes || filters.leadTypes.size === 0;
-    const allSt  = !hasSt || !filters.states || filters.states.size === 0;
-    const keep = row => Math.floor(row[0] / 100) === ym
-      && (allSt  || filters.states.has(maps.st[row[4]]))
-      && (allMdl || filters.models.has(maps.mdl[row[1]]))
-      && (allSrc || filters.sources.has(maps.src[row[2]]))
-      && (allLT  || filters.leadTypes.has(maps.lt[row[3]]));
-    const L = new Array(dim).fill(0), Rd = new Array(dim).fill(0), Rc = new Array(dim).fill(0);
-    let uL = 0, uRd = 0, uRc = 0;                       // "no day recorded" parts of the month
-    for (const row of dd) {
-      if (!keep(row)) continue;
-      const d = row[0] % 100;
-      if (d === 0 || d > dim) { uL += row[4 + o]; if (!upd) { uRd += row[6 + o]; uRc += row[7 + o]; } continue; }
-      L[d - 1] += row[4 + o];
-      if (!upd) { Rd[d - 1] += row[6 + o]; Rc[d - 1] += row[7 + o]; }
+    const pYear = mon === 1 ? year - 1 : year, pMon = mon === 1 ? 12 : mon - 1;
+    const pYm = pYear * 100 + pMon, pDim = new Date(pYear, pMon, 0).getDate();
+    const allMdl  = !filters.models    || filters.models.size    === 0;
+    const allSrc  = !filters.sources   || filters.sources.size   === 0;
+    const allLT   = !filters.leadTypes || filters.leadTypes.size === 0;
+    const allSt   = !filters.states    || filters.states.size    === 0;
+    const allCity = !filters.cities    || filters.cities.size    === 0;
+    const needExact = !allCity || !!(filters.purchasedModels && filters.purchasedModels.size);
+
+    // Purchased Model filter: same resolution as the other tabs (canonical or Retail-Dispersion family names).
+    let pmSel = null;
+    if (dx && filters.purchasedModels && filters.purchasedModels.size) {
+      const up = v => String(v == null ? '' : v).trim().toUpperCase().replace(/^TVS\s+/, '');
+      const want = new Set([...filters.purchasedModels].map(up));
+      const disp = maps.mdl_disp || [];
+      pmSel = new Set();
+      dx.maps.mdl.forEach((name, i) => { const j = maps.mdl.indexOf(name); if (want.has(up(name)) || (j >= 0 && want.has(up(disp[j])))) pmSel.add(i); });
     }
-    if (upd) {
-      for (const row of ddu) {
+    const okM  = dx ? dx.maps.mdl.map(n => allMdl || filters.models.has(n)) : null;
+    const okS  = dx ? dx.maps.src.map(n => allSrc || filters.sources.has(n)) : null;
+    const okT  = dx ? dx.maps.lt.map(n => allLT || filters.leadTypes.has(n)) : null;
+    const okSt = dx ? dx.maps.st.map(n => allSt || filters.states.has(n)) : null;
+    const okC  = dx ? dx.cityName.map(n => allCity || filters.cities.has(n)) : null;
+
+    // One month of per-day leads / retails under the current filters.
+    const calc = (cym, cdim) => {
+      const L = new Array(cdim).fill(0), Rd = new Array(cdim).fill(0), Rc = new Array(cdim).fill(0);
+      let uL = 0, uRd = 0, uRc = 0;                       // "no day recorded" parts of the month
+      if (dx && dx.months.includes(cym)) {
+        const A = dx.L;
+        for (let i = 0; i < A.n.length; i++) {
+          if (Math.floor(A.d[i] / 100) !== cym) continue;
+          if (!(okM[A.mi[i]] && okS[A.si[i]] && okT[A.lt[i]] && okSt[A.st[i]] && okC[A.ci[i]])) continue;
+          const d = A.d[i] % 100;
+          if (d === 0 || d > cdim) uL += A.n[i]; else L[d - 1] += A.n[i];
+        }
+        const B = dx.R, K = upd ? B.ud : B.cd;
+        for (let i = 0; i < B.n.length; i++) {
+          if (Math.floor(K[i] / 100) !== cym || B.rt[i] === 2) continue;
+          if (!(okM[B.mi[i]] && okS[B.si[i]] && okT[B.lt[i]] && okSt[B.st[i]] && okC[B.ci[i]])) continue;
+          if (pmSel && !pmSel.has(B.pm[i])) continue;
+          const d = K[i] % 100, dms = B.rt[i] === 0;
+          if (d === 0 || d > cdim) { if (dms) uRd += B.n[i]; else uRc += B.n[i]; }
+          else if (dms) Rd[d - 1] += B.n[i]; else Rc[d - 1] += B.n[i];
+        }
+        return { L, Rd, Rc, uL, uRd, uRc, exact: true };
+      }
+      if (!dd.length) return null;
+      const keep = row => Math.floor(row[0] / 100) === cym
+        && (allMdl || filters.models.has(maps.mdl[row[1]]))
+        && (allSrc || filters.sources.has(maps.src[row[2]]))
+        && (allLT  || filters.leadTypes.has(maps.lt[row[3]]))
+        && (!hasSt || allSt || filters.states.has(maps.st[row[4]]));
+      for (const row of dd) {
         if (!keep(row)) continue;
         const d = row[0] % 100;
-        if (d === 0 || d > dim) { uRd += row[5 + o]; uRc += row[6 + o]; continue; }
-        Rd[d - 1] += row[5 + o]; Rc[d - 1] += row[6 + o];
+        if (d === 0 || d > cdim) { uL += row[4 + o]; if (!upd) { uRd += row[6 + o]; uRc += row[7 + o]; } continue; }
+        L[d - 1] += row[4 + o];
+        if (!upd) { Rd[d - 1] += row[6 + o]; Rc[d - 1] += row[7 + o]; }
       }
-    }
+      if (upd) {
+        for (const row of ddu) {
+          if (!keep(row)) continue;
+          const d = row[0] % 100;
+          if (d === 0 || d > cdim) { uRd += row[5 + o]; uRc += row[6 + o]; continue; }
+          Rd[d - 1] += row[5 + o]; Rc[d - 1] += row[6 + o];
+        }
+      }
+      return { L, Rd, Rc, uL, uRd, uRc, exact: false };
+    };
+
+    const cur = calc(ym, dim);
+    if (!cur) return null;
+    const { L, Rd, Rc, uL, uRd, uRc } = cur;
     const showD = RT !== 'co', showC = RT !== 'dms';
-    let last = 0;
-    for (let i = 0; i < dim; i++) if (L[i] > 0 || Rd[i] > 0 || Rc[i] > 0) last = i + 1;
+    let last = 0, lastL = 0;                       // lastL: latest day that has leads (a day with only retails is not a full lead day)
+    for (let i = 0; i < dim; i++) { if (L[i] > 0 || Rd[i] > 0 || Rc[i] > 0) last = i + 1; if (L[i] > 0) lastL = i + 1; }
     const days = [];
     for (let i = 0; i < dim; i++) {
       const rd = showD ? Rd[i] : 0, rc = showC ? Rc[i] : 0;
@@ -3633,9 +3711,33 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
     const nRd = showD ? uRd : 0, nRc = showC ? uRc : 0, uR = nRd + nRc;     // no-day retails
     const tL = dL + uL, tRd = dRd + nRd, tRc = dRc + nRc, tR = tRd + tRc;   // month totals incl. no-day
     const peak = shown.reduce((b, x) => (x.l > b.l ? x : b), shown[0]);
+
+    // Month-to-date comparison: days 1..cut of this month against days 1..cut of the previous month,
+    // where cut = the latest day that has leads (so a part-day of retails does not skew it).
+    let cmp = null;
+    const prev = calc(pYm, pDim);
+    if (prev && (prev.exact || !needExact) && prev.L.some(v => v > 0)) {
+      let cut = 0;
+      for (let i = 0; i < dim; i++) if (L[i] > 0) cut = i + 1;
+      if (cut > 0) {
+        const win = (A, n) => { let s = 0; for (let i = 0; i < Math.min(n, A.length); i++) s += A[i]; return s; };
+        const pcut = Math.min(cut, pDim);
+        const cL = win(L, cut), pL = win(prev.L, pcut);
+        const cR = (showD ? win(Rd, cut) : 0) + (showC ? win(Rc, cut) : 0);
+        const pR = (showD ? win(prev.Rd, pcut) : 0) + (showC ? win(prev.Rc, pcut) : 0);
+        const cPk = Math.max(...L.slice(0, cut)), pPk = Math.max(...prev.L.slice(0, pcut));
+        const pct = (a, b) => (b > 0 ? (a - b) / b * 100 : null);
+        cmp = {
+          label: '1–' + cut + ' ' + MONTHS[pMon - 1],
+          leads: pct(cL, pL), retails: pct(cR, pR),
+          l2r: (cL > 0 && pL > 0) ? (cR / cL - pR / pL) * 100 : null,
+          avg: pct(cL / cut, pL / pcut), peak: pct(cPk, pPk),
+        };
+      }
+    }
     return { year, mon, dim, days, shown, last, uL, uR, nRd, nRc, dL, dR: dRd + dRc, tL, tR, tRd, tRc, peak,
-             avgL: last ? dL / last : 0, l2r: tL > 0 ? tR / tL * 100 : 0 };
-  }, [dd, ddu, sel, filters, RT, maps, upd, hasSt]);
+             avgL: lastL ? dL / lastL : 0, l2r: tL > 0 ? tR / tL * 100 : 0, exact: cur.exact, cmp };
+  }, [dd, ddu, sel, filters, RT, maps, upd, hasSt, dx]);
 
   useEffect(() => {
     const canvas = chartRef.current;
@@ -3681,7 +3783,7 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
   if (!opts.length || !view) return ce('div', { className: 'fs-14', style: { textAlign: 'center', padding: 60, color: '#94A3B8' } },
     'No month selected — pick at least one month in the Month filter above.');
 
-  const filtersNA = [(!hasSt && filters.states && filters.states.size), (filters.cities && filters.cities.size), (filters.purchasedModels && filters.purchasedModels.size)].some(n => n > 0);
+  const filtersNA = !view.exact && [(!hasSt && filters.states && filters.states.size), (filters.cities && filters.cities.size), (filters.purchasedModels && filters.purchasedModels.size)].some(n => n > 0);
 
   const noDayLabel = upd ? 'Attributed outside month (month-close)' : 'No day recorded';
   const exportData = () => {
@@ -3711,7 +3813,7 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
       (upd
         ? '📅 On Update: leads are counted on the day they were created; retails on the day they were attributed (retail date), so the month total matches the Overview. '
         : '📅 On Create: leads are counted on the day they were created and retails are attributed to that creation day (recent days keep converting, so their L2R% rises). ') +
-      'Model, Source, Lead Type and State filters apply' + (filtersNA ? ' — City and Purchased Model filters do not apply to this tab' : '') + '.');
+      (view.exact ? 'All filters apply.' : 'Model, Source, Lead Type and State filters apply' + (filtersNA ? ' — City and Purchased Model filters are available for the latest 4 months only (not for ' + sel + ')' : '') + '.'));
 
   const msgCard = (icon, title, body) => ce('div', { className: 'fade-up' }, noteBar, navCard(false),
     ce('div', { className: 'card', style: { padding: '40px 24px', textAlign: 'center', color: '#64748B' } },
@@ -3735,11 +3837,11 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
   if (view.last === 0) return msgCard('🔎', 'No leads for this selection in ' + sel, 'Try widening the Model, Source or Lead Type filters.');
 
   const KPIs = [
-    { label: 'Leads (month to date)', value: Nf(view.tL), sub: view.last + ' day' + (view.last === 1 ? '' : 's') + ' of data', color: '#003087' },
-    { label: upd ? 'Retails (by retail date)' : 'Retails (of leads created)', value: Nf(view.tR), sub: 'DMS ' + Nf(view.tRd) + ' · VOC ' + Nf(view.tRc), color: '#E31837' },
-    { label: 'L2R %', value: view.l2r.toFixed(1) + '%', sub: 'Retails ÷ Leads', color: '#F5A623' },
-    { label: 'Avg leads / day', value: Nf(Math.round(view.avgL)), sub: 'over days with data', color: '#7C3AED' },
-    { label: 'Peak day', value: view.peak ? Nf(view.peak.l) : '—', sub: view.peak ? view.peak.d + ' ' + MONTHS[view.mon - 1] + ' (' + view.peak.wd + ')' : '', color: '#059669' },
+    { label: 'Leads (month to date)', value: Nf(view.tL), sub: view.last + ' day' + (view.last === 1 ? '' : 's') + ' of data', color: '#003087', dl: view.cmp && fmtDelta(view.cmp.leads, '%') },
+    { label: upd ? 'Retails (by retail date)' : 'Retails (of leads created)', value: Nf(view.tR), sub: 'DMS ' + Nf(view.tRd) + ' · VOC ' + Nf(view.tRc), color: '#E31837', dl: view.cmp && fmtDelta(view.cmp.retails, '%') },
+    { label: 'L2R %', value: view.l2r.toFixed(1) + '%', sub: 'Retails ÷ Leads', color: '#F5A623', dl: view.cmp && fmtDelta(view.cmp.l2r, ' pp') },
+    { label: 'Avg leads / day', value: Nf(Math.round(view.avgL)), sub: 'over days with data', color: '#7C3AED', dl: view.cmp && fmtDelta(view.cmp.avg, '%') },
+    { label: 'Peak day', value: view.peak ? Nf(view.peak.l) : '—', sub: view.peak ? view.peak.d + ' ' + MONTHS[view.mon - 1] + ' (' + view.peak.wd + ')' : '', color: '#059669', dl: view.cmp && fmtDelta(view.cmp.peak, '%') },
   ];
 
   return ce('div', { className: 'fade-up' },
@@ -3750,7 +3852,9 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
         ce('div', { style: { position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: k.color, borderRadius: '12px 12px 0 0' } }),
         ce('div', { className: 'kpi-label' }, k.label),
         ce('div', { className: 'kpi-value' + (k.value.length > 7 ? ' kpi-long' : ''), style: { color: k.color } }, k.value),
-        ce('div', { className: 'kpi-sub', style: { color: k.color } }, k.sub)
+        ce('div', { className: 'kpi-sub', style: { color: k.color } }, k.sub),
+        k.dl && ce('div', { style: { marginTop: 5, fontSize: 11, fontWeight: 700, color: k.dl.up ? '#059669' : '#DC2626' } },
+          k.dl.txt, ce('span', { style: { fontWeight: 500, color: '#94A3B8' } }, ' vs ' + view.cmp.label))
       ))
     ),
     ce('div', { className: 'card', style: { padding: '16px 18px', marginBottom: 14 } },
