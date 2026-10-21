@@ -3575,6 +3575,8 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
   const dd  = data.dd  || [];
   const ddu = data.ddu || [];
   const upd = leadsMode === 'update';
+  const hasSt = data.dd_v === 2;          // rows carry a state column after lead type (older payloads do not)
+  const o = hasSt ? 1 : 0;
   const chartRef = useRef(); const chartInst = useRef();
   const WD = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 
@@ -3593,7 +3595,9 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
     const allMdl = !filters.models    || filters.models.size    === 0;
     const allSrc = !filters.sources   || filters.sources.size   === 0;
     const allLT  = !filters.leadTypes || filters.leadTypes.size === 0;
+    const allSt  = !hasSt || !filters.states || filters.states.size === 0;
     const keep = row => Math.floor(row[0] / 100) === ym
+      && (allSt  || filters.states.has(maps.st[row[4]]))
       && (allMdl || filters.models.has(maps.mdl[row[1]]))
       && (allSrc || filters.sources.has(maps.src[row[2]]))
       && (allLT  || filters.leadTypes.has(maps.lt[row[3]]));
@@ -3602,16 +3606,16 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
     for (const row of dd) {
       if (!keep(row)) continue;
       const d = row[0] % 100;
-      if (d === 0 || d > dim) { uL += row[4]; if (!upd) { uRd += row[6]; uRc += row[7]; } continue; }
-      L[d - 1] += row[4];
-      if (!upd) { Rd[d - 1] += row[6]; Rc[d - 1] += row[7]; }
+      if (d === 0 || d > dim) { uL += row[4 + o]; if (!upd) { uRd += row[6 + o]; uRc += row[7 + o]; } continue; }
+      L[d - 1] += row[4 + o];
+      if (!upd) { Rd[d - 1] += row[6 + o]; Rc[d - 1] += row[7 + o]; }
     }
     if (upd) {
       for (const row of ddu) {
         if (!keep(row)) continue;
         const d = row[0] % 100;
-        if (d === 0 || d > dim) { uRd += row[5]; uRc += row[6]; continue; }
-        Rd[d - 1] += row[5]; Rc[d - 1] += row[6];
+        if (d === 0 || d > dim) { uRd += row[5 + o]; uRc += row[6 + o]; continue; }
+        Rd[d - 1] += row[5 + o]; Rc[d - 1] += row[6 + o];
       }
     }
     const showD = RT !== 'co', showC = RT !== 'dms';
@@ -3631,7 +3635,7 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
     const peak = shown.reduce((b, x) => (x.l > b.l ? x : b), shown[0]);
     return { year, mon, dim, days, shown, last, uL, uR, nRd, nRc, dL, dR: dRd + dRc, tL, tR, tRd, tRc, peak,
              avgL: last ? dL / last : 0, l2r: tL > 0 ? tR / tL * 100 : 0 };
-  }, [dd, ddu, sel, filters, RT, maps, upd]);
+  }, [dd, ddu, sel, filters, RT, maps, upd, hasSt]);
 
   useEffect(() => {
     const canvas = chartRef.current;
@@ -3677,7 +3681,7 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
   if (!opts.length || !view) return ce('div', { className: 'fs-14', style: { textAlign: 'center', padding: 60, color: '#94A3B8' } },
     'No month selected — pick at least one month in the Month filter above.');
 
-  const filtersNA = [(filters.states && filters.states.size), (filters.cities && filters.cities.size), (filters.purchasedModels && filters.purchasedModels.size)].some(n => n > 0);
+  const filtersNA = [(!hasSt && filters.states && filters.states.size), (filters.cities && filters.cities.size), (filters.purchasedModels && filters.purchasedModels.size)].some(n => n > 0);
 
   const noDayLabel = upd ? 'Attributed outside month (month-close)' : 'No day recorded';
   const exportData = () => {
@@ -3707,7 +3711,7 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
       (upd
         ? '📅 On Update: leads are counted on the day they were created; retails on the day they were attributed (retail date), so the month total matches the Overview. '
         : '📅 On Create: leads are counted on the day they were created and retails are attributed to that creation day (recent days keep converting, so their L2R% rises). ') +
-      'Model, Source and Lead Type filters apply' + (filtersNA ? ' — State, City and Purchased Model filters do not apply to this tab' : '') + '.');
+      'Model, Source, Lead Type and State filters apply' + (filtersNA ? ' — City and Purchased Model filters do not apply to this tab' : '') + '.');
 
   const msgCard = (icon, title, body) => ce('div', { className: 'fade-up' }, noteBar, navCard(false),
     ce('div', { className: 'card', style: { padding: '40px 24px', textAlign: 'center', color: '#64748B' } },

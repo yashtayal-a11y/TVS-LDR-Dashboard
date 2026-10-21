@@ -2388,7 +2388,7 @@ def build_payload(all_leads, retail_map):
         bump(univ,    f"{mi}|{si}|{sti}|{tti}|{li}", is_ret, rtype)
         _dday = lead_day(lid, lm, _cds[i])
         if _dday % 100 == 0: _dd_undated += 1
-        bump(dd, f"{_dday}|{mi}|{si}|{tti}", is_ret, rtype)
+        bump(dd, f"{_dday}|{mi}|{si}|{tti}|{sti}", is_ret, rtype)
         if is_ret:
             # On Update: the retail is counted on the day it was attributed (performanceMonth date), inside its retail month.
             _ri  = retail_map[lid]
@@ -2398,7 +2398,7 @@ def build_payload(all_leads, retail_map):
             if _uday % 100 == 0:
                 _ddu_undated += 1
                 if _uad: _ddu_outside += 1      # a day exists but lies outside the retail month
-            _ue = ddu.setdefault(f"{_uday}|{mi}|{si}|{tti}", [0, 0, 0])
+            _ue = ddu.setdefault(f"{_uday}|{mi}|{si}|{tti}|{sti}", [0, 0, 0])
             _ue[0] += 1
             _rtu = rtype.upper()
             if 'DMS' in _rtu:    _ue[1] += 1
@@ -2565,10 +2565,11 @@ def build_payload(all_leads, retail_map):
         'sm':      to_rows(sm,  lambda k: list(map(int, k.split('|')))),
         'ltm':     to_rows(ltm, lambda k: list(map(int, k.split('|')))),
         'mm':      to_rows(mm,  lambda k: list(map(int, k.split('|')))),
-        # [day YYYYMMDD (YYYYMM00 = undated), model_idx, src_idx, lt_idx, L, R, R_dms, R_co]
+        # [day YYYYMMDD (YYYYMM00 = undated), model_idx, src_idx, lt_idx, state_idx, L, R, R_dms, R_co]
         'dd':      to_rows(dd,  lambda k: list(map(int, k.split('|')))),
-        # [retail day YYYYMMDD (YYYYMM00 = no day), model_idx, src_idx, lt_idx, R, R_dms, R_co]
+        # [retail day YYYYMMDD (YYYYMM00 = no day), model_idx, src_idx, lt_idx, state_idx, R, R_dms, R_co]
         'ddu':     [[*map(int, k.split('|')), *v] for k, v in ddu.items()],
+        'dd_v':    2,   # Day-on-Day rows carry a state_idx column after lt_idx
         'stm':     to_rows(stm, lambda k: list(map(int, k.split('|')))),
         'mxst':    to_rows(mxst,  lambda k: list(map(int, k.split('|')))),
         'mlt':     to_rows(mlt,   lambda k: list(map(int, k.split('|')))),
