@@ -3261,15 +3261,20 @@ const StatusFunnelTab = React.memo(function StatusFunnelTab({ data, filters, mon
     const hasSrcF = filters.sources && filters.sources.size > 0;
     const hasCF   = filters.cities  && filters.cities.size  > 0;
     const hasMdlF = filters.models  && filters.models.size  > 0;
+    const hasStF  = filters.states  && filters.states.size  > 0 && !!maps.city_state;
+    const hasLtF  = filters.leadTypes && filters.leadTypes.size > 0 && data.snf_v === 2;   // older payloads carry no lead type
 
     const acc = new Map(); // sni → count
     for (const row of snf) {
-      const [sni, si, cti, mi, li, count] = row;
+      const [sni, si, cti, mi, li] = row;
+      const count = row[row.length - 1];
       const mon = maps.lm[li];
       if (!allM && !monthSet.has(mon)) continue;
       if (hasSrcF && !filters.sources.has(maps.src[si])) continue;
       if (hasCF   && !filters.cities.has(maps.city[cti])) continue;
       if (hasMdlF && !filters.models.has(maps.mdl[mi])) continue;
+      if (hasStF && !filters.states.has(maps.st[maps.city_state[cti]])) continue;
+      if (hasLtF && !filters.leadTypes.has(maps.lt[row[5]])) continue;
       acc.set(sni, (acc.get(sni) || 0) + count);
     }
 
@@ -3342,7 +3347,7 @@ const StatusFunnelTab = React.memo(function StatusFunnelTab({ data, filters, mon
     // ── Summary KPIs ──────────────────────────────────────────────────────
     ce(SummaryBar, { kpis: [
       { label:'Statuses',     value: Nf(displayRows.length) },
-      { label:'Leads (CPS-triggered, current + T-1)', value: Nf(totalLeads), accent:'#003087' },
+      { label:'Leads (with an LMS status)', value: Nf(totalLeads), accent:'#003087' },
     ] }),
 
     // ── Table ───────────────────────────────────────────────────────────

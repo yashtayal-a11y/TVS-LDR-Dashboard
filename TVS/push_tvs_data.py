@@ -2416,7 +2416,7 @@ def build_payload(all_leads, retail_map):
         _raw_sn = _norm_sn(_sns[i]) if _sns[i] else ''
         if _raw_sn:
             sni = ix(sn_idx, sn_arr, _raw_sn)
-            _sfk = f"{sni}|{si}|{cti}|{mi}|{li}"
+            _sfk = f"{sni}|{si}|{cti}|{mi}|{li}|{tti}"
             snf[_sfk] = snf.get(_sfk, 0) + 1
 
         if _dls is not None:
@@ -2645,7 +2645,8 @@ def build_payload(all_leads, retail_map):
         'ram_meta':  {'total': _ram_total, 'valid': _ram_valid,
                       'no_rd': _ram_no_rd, 'no_cd': _ram_no_cd, 'neg': _ram_neg},
         # [status_name_idx, src_idx, city_idx, model_idx, lead_month_idx, count]
-        'snf':       [[*map(int, k.split('|')), v] for k, v in snf.items()],
+        'snf':       [[*map(int, k.split('|')), v] for k, v in snf.items()],   # [status, src, city, model, lead_month, lead_type, count]
+        'snf_v':     2,
     }
     print(f"Done — {total:,} leads  {len(retail_map):,} retails", flush=True)
     print(f"Ageing: retails={_ram_total:,}  valid={_ram_valid:,}  "
