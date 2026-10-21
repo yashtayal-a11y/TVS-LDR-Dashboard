@@ -2161,7 +2161,7 @@ const BuyingIntentTab = React.memo(function BuyingIntentTab({ data, filters, mon
 /* ════════════════════════════════════════════════════════════════════
    FILTER BAR
    ════════════════════════════════════════════════════════════════════ */
-const FilterBar = React.memo(function FilterBar({ data, filters, onFiltersChange, RT, setRT, viewerMode }) {
+const FilterBar = React.memo(function FilterBar({ data, filters, onFiltersChange, RT, setRT, viewerMode, tab }) {
   const { maps } = data;
   const months    = useMemo(() => [...new Set(maps.lm)].sort((a,b) => monthOrder(b)-monthOrder(a)), [maps]);
   const leadTypes = useMemo(() => [...new Set(maps.lt)].sort(), [maps]);
@@ -2171,10 +2171,14 @@ const FilterBar = React.memo(function FilterBar({ data, filters, onFiltersChange
   const cities    = useMemo(() => maps.city ? [...new Set(maps.city)].sort() : [], [maps]);
   const purchasedModels = useMemo(() => {
     const pm = new Set();
+    if (tab === 'daily') {   // Day on Day works at individual-model level (the daily file), not Retail-Dispersion families
+      for (const row of [...(data.pmr || []), ...(data.u_pmr || [])]) { const n = maps.mdl[row[0]]; if (n) pm.add(n); }
+      return [...pm].sort();
+    }
     const dlm = maps.dlm || maps.mdl;   // Retail Dispersion family names
     for (const row of (data.disp || [])) { const n = dlm[row[1]]; if (n) pm.add(n); }
     return [...pm].sort();
-  }, [data.disp, maps]);
+  }, [data.disp, data.pmr, data.u_pmr, maps, tab]);
 
   function set(key, val) { onFiltersChange({ ...filters, [key]: val }); }
   function reset() { onFiltersChange({ months: new Set(), leadTypes: new Set(), sources: new Set(), models: new Set(), states: new Set(), cities: new Set(), purchasedModels: new Set() }); setRT('all'); }
@@ -4312,7 +4316,7 @@ function App() {
         ce('div', { className:'fs-13',style:{color:'#64748B'} }, 'Fetching data from Apps Script…')
       ),
       effectiveData && ce('div', null,
-        ce(FilterBar, { data:effectiveData, filters, onFiltersChange:f=>startT(()=>setFilters(f)), RT, setRT, viewerMode }),
+        ce(FilterBar, { data:effectiveData, filters, onFiltersChange:f=>startT(()=>setFilters(f)), RT, setRT, viewerMode, tab }),
         filters.cities && filters.cities.size > 0 && (tab === 'lt' || tab === 'model') && ce('div', {
           className:'fs-10',style:{color:'#92400E',background:'#FFF3CD',border:'1px solid #F5A623',borderRadius:8,padding:'5px 12px',marginBottom:8}
         }, '⚠ City filter is active — this tab does not support city filtering (no city-level matrix for this breakdown).'),
