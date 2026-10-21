@@ -2261,7 +2261,6 @@ def build_payload(all_leads, retail_map):
     _ddu_outside = 0
     # Admin "Day on Day" detail file (data/tvs_daily.json.gz): the last 4 lead months at full granularity
     # (day x model x source x lead-type x state x city; retails also x purchased model), loaded on demand.
-    _dfm = set(sorted({_label_ym(_x.strip()) for _x in set(_lms) if _x and _x.strip()} - {0})[-4:])
     dly_L = {}    # (lead day, mi, si, lt, st, city) -> leads
     dly_R = {}    # (lead day, retail day, mi, si, lt, st, city, purchased model, 0=DMS/1=CallOut/2=other) -> retails
     dl_sn = {}  # city × dealer × lead-month → [L_open, L_booking, L_lost]
@@ -2321,6 +2320,8 @@ def build_payload(all_leads, retail_map):
     _cds    = _col('CreateDate')   # Lead CreateDate — used for Retail Ageing only
     _dls    = all_leads[dl_col].fillna('').astype(str).values if dl_col and dl_col in _c else None
     _sns    = _col('StatusName')
+    # latest 4 lead months get the full-granularity daily detail file
+    _dfm = set(sorted({_label_ym(_x.strip()) for _x in set(_lms) if _x and _x.strip()} - {0})[-4:])
 
     del all_leads, _c  # free ~500 MB DataFrame now that we have arrays
     _gc.collect()
