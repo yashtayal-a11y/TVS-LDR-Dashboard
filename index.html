@@ -558,7 +558,7 @@ function makeUnivFilter(filters) {
   const allMdl = !filters.models    || filters.models.size    === 0;
   const allSt  = !filters.states    || filters.states.size    === 0;
   const allLT  = !filters.leadTypes || filters.leadTypes.size === 0;
-  if (allMdl && allSt && allLT) return null;
+  if (allMdl && allSt && allLT && !filters._cityView) return null;   // _cityView: univ was rebuilt from the City x Source x Model table
   return (row, maps) => {
     if (!allMdl && !filters.models.has(maps.mdl[row[0]]))    return false;
     if (!allSt  && !filters.states.has(maps.st[row[2]]))     return false;
@@ -1468,13 +1468,21 @@ const SourceTab = React.memo(function SourceTab({ data, filters, months, RT, pmM
     let gL=0, gR=0;
     const mSet = new Set(months);
     const bySrc = new Map();
+    const pmRI = RT === 'dms' ? 1 : RT === 'co' ? 2 : 0;
     if (univF) {
+      const seenRT = new Set();
       for (const row of univ) {
         if (!mSet.has(maps.lm[row[4]])) continue;
         const src = maps.src[row[1]];
         if (!allS && !filters.sources.has(src)) continue;
         if (!univF(row, maps)) continue;
-        const [l,r] = getLR(row); gL+=l; gR+=r;
+        const [l,r_raw] = getLR(row);
+        let r = r_raw;
+        if (pmMaps) {   // same Purch. Model rule as the per-month cards below
+          const rtKey = row[0]+'|'+row[1]+'|'+row[4];
+          if (!seenRT.has(rtKey)) { seenRT.add(rtKey); const v = pmMaps.miSiLi.get(rtKey); r = v ? v[pmRI] : 0; } else r = 0;
+        }
+        gL+=l; gR+=r;
         const c=bySrc.get(src)||[0,0]; c[0]+=l; c[1]+=r; bySrc.set(src,c);
       }
     } else if (hasCityF && csm.length > 0) {
@@ -1492,13 +1500,16 @@ const SourceTab = React.memo(function SourceTab({ data, filters, months, RT, pmM
         if (!mSet.has(maps.lm[row[1]])) continue;
         const src = maps.src[row[0]];
         if (!allS && !filters.sources.has(src)) continue;
-        const [l,r] = getLR(row); gL+=l; gR+=r;
+        const [l,r_raw] = getLR(row);
+        const pmOv = pmMaps && pmMaps.siLi.get(row[0]+'|'+row[1]);
+        const r = pmOv ? pmOv[pmRI] : (pmMaps ? 0 : r_raw);
+        gL+=l; gR+=r;
         const c=bySrc.get(src)||[0,0]; c[0]+=l; c[1]+=r; bySrc.set(src,c);
       }
     }
     const sorted = [...bySrc.entries()].sort((a,b)=>b[1][0]-a[1][0]);
     return { l:gL, r:gR, l2r:gL>0?gR/gL*100:0, sorted };
-  }, [sm, csm, univ, maps, filters, getLR, hasCityF, months]);
+  }, [sm, csm, univ, maps, filters, getLR, hasCityF, months, pmMaps, RT]);
 
   return ce('div', {className:'fade-up'},
     crossMonthTotals.l > 0 && ce('div', { className:'card', style:{padding:'16px 18px',marginBottom:14,borderTop:'3px solid #003087'} },
@@ -1540,7 +1551,7 @@ const SourceTab = React.memo(function SourceTab({ data, filters, months, RT, pmM
    LT × SOURCE TAB
    ════════════════════════════════════════════════════════════════════ */
 const LTSourceTab = React.memo(function LTSourceTab({ data, filters, months, RT, pmMaps }) {
-  const { maps, ltm, univ: univRaw } = data;
+  const { maps, ltm, mm, univ: univRaw } = data;
   const univ = univRaw || [];
   const getLR = useMemo(() => makeLR(data.rt_cols, RT), [data.rt_cols, RT]);
   const allSrcs = useMemo(() => [...new Set(maps.src)], [maps]);
@@ -1554,6 +1565,17 @@ const LTSourceTab = React.memo(function LTSourceTab({ data, filters, months, RT,
     const allLT = !filters.leadTypes || filters.leadTypes.size === 0;
     const univF = makeUnivFilter(filters);
     const pmRI = RT === 'dms' ? 1 : RT === 'co' ? 2 : 0;
+    if (pmMaps) {
+      // Purchased-model retails carry no Lead Type, so they cannot be split by it: one row with the correct total.
+      const dimFn = () => '(Lead Type not available with Purch. Model)';
+      const srcFn = (row, maps) => maps.src[row[1]];
+      if (univF) {
+        const lr = pmOverrideLRDedup(getLR, pmMaps.miSiLi, pmRI, row => row[0]+'|'+row[1]+'|'+row[4]);
+        return aggMonth(univ, maps, M, filters.sources, dimFn, srcFn, (row, maps) => maps.lm[row[4]], univF, lr);
+      }
+      const lr = pmOverrideLR(getLR, pmMaps.miSiLi, pmRI, row => row[0]+'|'+row[1]+'|'+row[2]);
+      return aggMonth(mm, maps, M, filters.sources, dimFn, srcFn, (row, maps) => maps.lm[row[2]], null, lr);
+    }
     if (univF) {
       // univ path: mi=row[0], si=row[1], li=row[4]  — dedup to avoid sti/tti double-counting
       const eff = pmOverrideLRDedup(getLR, pmMaps && pmMaps.miSiLi, pmRI, row => row[0]+'|'+row[1]+'|'+row[4]);
@@ -1574,7 +1596,7 @@ const LTSourceTab = React.memo(function LTSourceTab({ data, filters, months, RT,
       (row,maps) => maps.lm[row[2]],
       null, eff
     );
-  }, [ltm, univ, maps, filters, getLR, pmMaps, RT]);
+  }, [ltm, mm, univ, maps, filters, getLR, pmMaps, RT]);
 
   return ce('div', { className:'fade-up' },
     ce(MonthlyGrids, { title:'Lead Type × Source', months, renderAgg, srcGroups, dimLabel:'Lead Type',
@@ -2785,7 +2807,7 @@ const StateModelTab = React.memo(function StateModelTab({ data, filters, months,
   const buildAgg = useCallback((monthSet) => {
     const allSrc = !filters.sources   || filters.sources.size   === 0;
     const allLT  = !filters.leadTypes || filters.leadTypes.size === 0;
-    if (!allSrc || !allLT) {
+    if (!allSrc || !allLT || filters._cityView) {
       // Pre-filter univ by source and/or LT, then aggregate as State × Model cross-tab.
       // univ row positions: mi=0, si=1, sti=2, tti=3, li=4; L/R at row.length-4 / row.length-ri.
       // Summing over tti for fixed (mi,si,sti,li) gives correct total leads — no seenRT dedup
@@ -4165,9 +4187,27 @@ function App() {
     ? TABS.filter(t => ['modelxsrc','modelperf','statexmodel','geodealer','pivot'].includes(t.id))
     : TABS.filter(t => t.id !== 'daily' || role === 'admin');   // Day on Day: admins only
 
+  // City filter: the main matrices have no City dimension, so for the tabs below the Model x Source x Month
+  // universe is rebuilt from the City x Source x Model x Month table (leads and retails honour City + Month + Source +
+  // Model + State). That table has no Lead Type, so the Lead Type filter is dropped there (a notice says so).
+  const CITY_TABS = ['overview','source','ltxsrc','modelxsrc','modelperf','statexmodel'];
+  const cityView = useMemo(() => {
+    const d = effectiveData;
+    if (!d || !filters.cities || filters.cities.size === 0 || !d.cxsm || !d.cxsm.length || !d.maps.city_state) return null;
+    const mp = d.maps, want = new Set(), ltNA = mp.lt.length;
+    mp.city.forEach((c, i) => { if (filters.cities.has(c)) want.add(i); });
+    const univC = [];
+    for (const r of d.cxsm) { if (want.has(r[0])) univC.push([r[2], r[1], mp.city_state[r[0]], ltNA, r[3], r[4], r[5], r[6], r[7]]); }
+    return {
+      data: { ...d, univ: univC, maps: { ...mp, lt: [...mp.lt, '(Lead Type n/a with City)'] } },
+      filters: { ...filters, cities: new Set(), leadTypes: new Set(), _cityView: true },
+    };
+  }, [effectiveData, filters]);
+
   const tabContent = useMemo(() => {
     if (!effectiveData) return null;
-    const props = { data: effectiveData, filters, months, RT, viewerMode, leadsMode, pmMaps };
+    const cv = cityView && CITY_TABS.includes(tab) ? cityView : null;
+    const props = { data: cv ? cv.data : effectiveData, filters: cv ? cv.filters : filters, months, RT, viewerMode, leadsMode, pmMaps };
     switch (tab) {
       case 'overview':    return ce(OverviewTab,      props);
       case 'daily':       return role === 'admin' ? ce(DailyTab, props) : ce(OverviewTab, props);
@@ -4183,7 +4223,31 @@ function App() {
       case 'ageing':      return ce(RetailAgeingTab,   props);
       default: return null;
     }
-  }, [effectiveData, tab, filters, months, RT, viewerMode, leadsMode, role]);
+  }, [effectiveData, tab, filters, months, RT, viewerMode, leadsMode, role, pmMaps, cityView]);
+
+  // Filters a tab cannot honour (shown as a notice instead of silently showing unfiltered numbers).
+  const filterNotes = (() => {
+    const on = s => !!(s && s.size > 0), f = filters, n = [];
+    const cityOn = on(f.cities), pmOn = on(f.purchasedModels);
+    if (CITY_TABS.includes(tab)) {
+      if (cityOn && on(f.leadTypes)) n.push('Lead Type filter is not applied while a City is selected (there is no Lead Type split by City).');
+      if (cityOn && pmOn) n.push('Purch. Model retails are not available by City — they are shown for the other filters without the City.');
+      if (cityOn && tab === 'ltxsrc') n.push('Lead Type is not available by City — leads are shown as a single row.');
+    }
+    if (pmOn && (on(f.states) || on(f.leadTypes)) && ['overview','source','ltxsrc','modelxsrc','modelperf'].includes(tab))
+      n.push('Purch. Model retails are not available by State / Lead Type — retails follow Purch. Model, Month, Source and Model only (leads still follow every filter).');
+    if (tab === 'ltxsrc' && pmOn) n.push('Purch. Model retails cannot be split by Lead Type — leads and retails are shown as a single row.');
+    if ((tab === 'statexmodel' || tab === 'geodealer') && pmOn) n.push('Purch. Model filter is not applied on this tab (purchased-model retails are not available by State / City / Dealer).');
+    if (tab === 'dispersion') {
+      const na = [on(f.sources) && 'Source', on(f.leadTypes) && 'Lead Type', on(f.states) && 'State', cityOn && 'City', RT !== 'all' && 'Call Type (DMS / Call Out)'].filter(Boolean);
+      if (na.length) n.push(na.join(', ') + ' filter' + (na.length > 1 ? 's' : '') + ' not applied on this tab — it follows Month, Model and Purch. Model only.');
+    }
+    if (tab === 'statusfunnel') {
+      const na = [pmOn && 'Purch. Model', RT !== 'all' && 'Call Type (DMS / Call Out)'].filter(Boolean);
+      if (na.length) n.push(na.join(' and ') + ' filter' + (na.length > 1 ? 's' : '') + ' not applied on this tab (statuses are counted per lead, before any retail).');
+    }
+    return n;
+  })();
 
   // ── Auth gate — early returns after all hooks ──────────────────────
   if (authChecking) return ce('div', {
@@ -4322,12 +4386,9 @@ function App() {
       ),
       effectiveData && ce('div', null,
         ce(FilterBar, { data:effectiveData, filters, onFiltersChange:f=>startT(()=>setFilters(f)), RT, setRT, viewerMode, tab }),
-        filters.cities && filters.cities.size > 0 && (tab === 'lt' || tab === 'model') && ce('div', {
+        filterNotes.map((t, i) => ce('div', { key:'fn'+i,
           className:'fs-10',style:{color:'#92400E',background:'#FFF3CD',border:'1px solid #F5A623',borderRadius:8,padding:'5px 12px',marginBottom:8}
-        }, '⚠ City filter is active — this tab does not support city filtering (no city-level matrix for this breakdown).'),
-        filters.purchasedModels && filters.purchasedModels.size > 0 && (tab === 'statexmodel' || tab === 'geodealer') && ce('div', {
-          className:'fs-10',style:{color:'#92400E',background:'#FFF3CD',border:'1px solid #F5A623',borderRadius:8,padding:'5px 12px',marginBottom:8}
-        }, '⚠ Purch. Model filter is active — this tab does not support it (purchased-model retails are not available by State/City/Dealer).'),
+        }, '⚠ ' + t)),
         isPending && ce('div', { className:'fs-11',style:{textAlign:'center',padding:8,color:'#94A3B8'} }, 'Filtering…'),
         tabContent
       )
