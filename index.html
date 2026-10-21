@@ -298,23 +298,24 @@ function classifySrc(s) {
   if (['organic'].some(p => n.includes(p))) return 'organic';
   return 'nonms';
 }
-function buildSrcGroups(srcList) {
+function buildSrcGroups(srcList, waInPaid) {
   const adw = srcList.filter(s => classifySrc(s) === 'adwords');
   const fb  = srcList.filter(s => classifySrc(s) === 'msfb');
   const wa  = srcList.filter(s => classifySrc(s) === 'whatsapp');
   const org = srcList.filter(s => classifySrc(s) === 'organic');
   const nms = srcList.filter(s => classifySrc(s) === 'nonms');
   const groups = [];
-  const paidSrcs = [...adw, ...fb];
+  const paidSrcs = waInPaid ? [...adw, ...fb, ...wa] : [...adw, ...fb];
   const orgSrcs  = [...org, ...nms];
   if (paidSrcs.length) groups.push({
     id:'paid', label:'PAID', color:'#7C3AED', lightColor:'#EDE9FE', srcs: paidSrcs,
     subGroups: [
       ...(adw.length ? [{ id:'adwords', label:'ADWORDS', color:'#7C3AED', lightColor:'#F3F0FF', srcs: adw }] : []),
       ...(fb.length  ? [{ id:'msfb',    label:'MS FB',   color:'#2563EB', lightColor:'#EFF6FF', srcs: fb  }] : []),
+      ...(waInPaid && wa.length ? [{ id:'whatsapp', label:'WHATSAPP', color:'#25D366', lightColor:'#DCFCE7', srcs: wa }] : []),
     ]
   });
-  if (wa.length) groups.push({
+  if (wa.length && !waInPaid) groups.push({
     id:'whatsapp', label:'WHATSAPP', color:'#25D366', lightColor:'#DCFCE7', srcs: wa,
     subGroups: []
   });
@@ -1590,7 +1591,7 @@ const ModelSourceTab = React.memo(function ModelSourceTab({ data, filters, month
   const univ = univRaw || [];
   const getLR = useMemo(() => makeLR(data.rt_cols, RT), [data.rt_cols, RT]);
   const allSrcs = useMemo(() => [...new Set(maps.src)], [maps]);
-  const srcGroups = useMemo(() => buildSrcGroups(allSrcs), [allSrcs]);
+  const srcGroups = useMemo(() => buildSrcGroups(allSrcs, true), [allSrcs]);   // WhatsApp counts inside PAID on this tab
   const [expandedGrps, setExpandedGrps] = useState(new Set());
   const onToggleGrp = useCallback(id => setExpandedGrps(prev => {
     const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n;
