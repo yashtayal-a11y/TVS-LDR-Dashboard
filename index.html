@@ -3981,14 +3981,14 @@ function App() {
   const viewerMode = role === 'viewer';
   const visibleTabs = viewerMode
     ? TABS.filter(t => ['modelxsrc','modelperf','statexmodel','geodealer','pivot'].includes(t.id))
-    : TABS;
+    : TABS.filter(t => t.id !== 'daily' || role === 'admin');   // Day on Day: admins only
 
   const tabContent = useMemo(() => {
     if (!effectiveData) return null;
     const props = { data: effectiveData, filters, months, RT, viewerMode, leadsMode, pmMaps };
     switch (tab) {
       case 'overview':    return ce(OverviewTab,      props);
-      case 'daily':       return ce(DailyTab,         props);
+      case 'daily':       return role === 'admin' ? ce(DailyTab, props) : ce(OverviewTab, props);
       case 'source':      return ce(SourceTab,         props);
       case 'ltxsrc':      return ce(LTSourceTab,       props);
       case 'modelxsrc':   return ce(ModelSourceTab,    props);
@@ -4001,7 +4001,7 @@ function App() {
       case 'ageing':      return ce(RetailAgeingTab,   props);
       default: return null;
     }
-  }, [effectiveData, tab, filters, months, RT, viewerMode, leadsMode]);
+  }, [effectiveData, tab, filters, months, RT, viewerMode, leadsMode, role]);
 
   // ── Auth gate — early returns after all hooks ──────────────────────
   if (authChecking) return ce('div', {
