@@ -3669,7 +3669,7 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
         }
         for (let i = 0; i < B.n.length; i++) {
           if (Math.floor(K[i] / 100) !== cym || B.rt[i] === 2) continue;
-          if (!(okM[B.mi[i]] && okS[B.si[i]] && okT[B.lt[i]] && okSt[B.st[i]] && okC[B.ci[i]])) continue;
+          if (!((pmSel || okM[B.mi[i]]) && okS[B.si[i]] && okT[B.lt[i]] && okSt[B.st[i]] && okC[B.ci[i]])) continue;   // a Purchased Model selection replaces the enquired-Model filter for retails
           if (pmSel && !pmSel.has(B.pm[i])) continue;
           const d = K[i] % 100, dms = B.rt[i] === 0;
           if (d === 0 || d > cdim) { if (dms) uRd += B.n[i]; else uRc += B.n[i]; }
@@ -3818,7 +3818,7 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
       ['Purchased Model (retails only)', setTxt(filters.purchasedModels, 'All')], [],
       ['Leads', view.tL], ['Retail DMS', view.tRd], ['Retail VOC (Call Out)', view.tRc], ['Total Retail', view.tR], ['L2R%', +view.l2r.toFixed(2)], [],
       ['Sheets', 'Day on Day | By Model | By Source | By Lead Type | By State | By City | By Purchased Model | Lead detail | Retail detail'],
-      ['Note', 'Leads follow every filter except Purchased Model; Purchased Model only limits retails. Data is aggregated (no lead-level rows).']];
+      ['Note', 'Leads follow every filter except Purchased Model. When a Purchased Model is selected, retails follow it instead of the (enquired) Model filter. Data is aggregated (no lead-level rows).']];
 
     const A = dx.L, B = dx.R, K = upd ? B.ud : B.cd;
     const M = dx.maps, CN = dx.cityName;
@@ -3836,7 +3836,7 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
     for (let i = 0; i < B.n.length; i++) {
       if (Math.floor(K[i] / 100) !== ym || B.rt[i] === 2) continue;
       if (B.rt[i] === 0 ? !showD : !showC) continue;
-      if (!(P.okM[B.mi[i]] && P.okS[B.si[i]] && P.okT[B.lt[i]] && P.okSt[B.st[i]] && P.okC[B.ci[i]])) continue;
+      if (!((P.pmSel || P.okM[B.mi[i]]) && P.okS[B.si[i]] && P.okT[B.lt[i]] && P.okSt[B.st[i]] && P.okC[B.ci[i]])) continue;
       if (P.pmSel && !P.pmSel.has(B.pm[i])) continue;
       const rt = B.rt[i] === 0 ? 'DMS' : 'Call Out (VOC)', slot = B.rt[i] === 0 ? 1 : 2;
       retRows.push([dayTxt(B.cd[i]), dayTxt(B.ud[i]), M.mdl[B.mi[i]], M.src[B.si[i]], M.lt[B.lt[i]], M.st[B.st[i]], CN[B.ci[i]], M.mdl[B.pm[i]], rt, B.n[i]]);
@@ -3882,7 +3882,7 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
       (upd
         ? '📅 On Update: leads are counted on the day they were created; retails on the day they were attributed (retail date), so the month total matches the Overview. '
         : '📅 On Create: leads are counted on the day they were created and retails are attributed to that creation day (recent days keep converting, so their L2R% rises). ') +
-      (view.exact ? 'All filters apply (Purchased Model filters retails only, not leads).' : 'Model, Source, Lead Type and State filters apply' + (filtersNA ? ' — City and Purchased Model filters are available for the latest 4 months only (not for ' + sel + ')' : '') + '.'));
+      (view.exact ? 'All filters apply. Purchased Model only affects retails, and when it is selected retails follow it instead of the Model filter (leads still follow Model).' : 'Model, Source, Lead Type and State filters apply' + (filtersNA ? ' — City and Purchased Model filters are available for the latest 4 months only (not for ' + sel + ')' : '') + '.'));
 
   const msgCard = (icon, title, body) => ce('div', { className: 'fade-up' }, noteBar, navCard(false),
     ce('div', { className: 'card', style: { padding: '40px 24px', textAlign: 'center', color: '#64748B' } },
