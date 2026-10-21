@@ -3585,6 +3585,27 @@ function loadDailyDetail() {
 }
 
 // "▲ 12.3%" / "▼ 4.0 pp" for the month-to-date comparison (null when it cannot be computed).
+// Per-index filter masks for the daily detail file (every filter; Purchased Model is returned separately, it only affects retails).
+function dailyPreds(dx, filters, maps) {
+  const has = s => !!(s && s.size);
+  let pmSel = null;
+  if (has(filters.purchasedModels)) {
+    const up = v => String(v == null ? '' : v).trim().toUpperCase().replace(/^TVS\s+/, '');
+    const want = new Set([...filters.purchasedModels].map(up));
+    const disp = maps.mdl_disp || [];
+    pmSel = new Set();
+    dx.maps.mdl.forEach((name, i) => { const j = maps.mdl.indexOf(name); if (want.has(up(name)) || (j >= 0 && want.has(up(disp[j])))) pmSel.add(i); });
+  }
+  return {
+    pmSel,
+    okM:  dx.maps.mdl.map(n => !has(filters.models) || filters.models.has(n)),
+    okS:  dx.maps.src.map(n => !has(filters.sources) || filters.sources.has(n)),
+    okT:  dx.maps.lt.map(n => !has(filters.leadTypes) || filters.leadTypes.has(n)),
+    okSt: dx.maps.st.map(n => !has(filters.states) || filters.states.has(n)),
+    okC:  dx.cityName.map(n => !has(filters.cities) || filters.cities.has(n)),
+  };
+}
+
 function fmtDelta(v, unit) {
   if (v == null || !isFinite(v)) return null;
   const a = Math.abs(v).toFixed(1);
@@ -3631,20 +3652,8 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
     const allCity = !filters.cities    || filters.cities.size    === 0;
     const needExact = !allCity || !!(filters.purchasedModels && filters.purchasedModels.size);
 
-    // Purchased Model filter: same resolution as the other tabs (canonical or Retail-Dispersion family names).
-    let pmSel = null;
-    if (dx && filters.purchasedModels && filters.purchasedModels.size) {
-      const up = v => String(v == null ? '' : v).trim().toUpperCase().replace(/^TVS\s+/, '');
-      const want = new Set([...filters.purchasedModels].map(up));
-      const disp = maps.mdl_disp || [];
-      pmSel = new Set();
-      dx.maps.mdl.forEach((name, i) => { const j = maps.mdl.indexOf(name); if (want.has(up(name)) || (j >= 0 && want.has(up(disp[j])))) pmSel.add(i); });
-    }
-    const okM  = dx ? dx.maps.mdl.map(n => allMdl || filters.models.has(n)) : null;
-    const okS  = dx ? dx.maps.src.map(n => allSrc || filters.sources.has(n)) : null;
-    const okT  = dx ? dx.maps.lt.map(n => allLT || filters.leadTypes.has(n)) : null;
-    const okSt = dx ? dx.maps.st.map(n => allSt || filters.states.has(n)) : null;
-    const okC  = dx ? dx.cityName.map(n => allCity || filters.cities.has(n)) : null;
+    const P = dx ? dailyPreds(dx, filters, maps) : null;
+    const { okM, okS, okT, okSt, okC, pmSel } = P || {};
 
     // One month of per-day leads / retails under the current filters.
     const calc = (cym, cdim) => {
@@ -3786,11 +3795,72 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
 
   const noDayLabel = upd ? 'Attributed outside month (month-close)' : 'No day recorded';
   const exportData = () => {
+    const showD = RT !== 'co', showC = RT !== 'dms';
+    const dayTxt = d => (d % 100 === 0 ? noDayLabel : (d % 100) + ' ' + MONTHS[Math.floor(d / 100) % 100 - 1] + ' ' + Math.floor(d / 10000));
+    const pct = (l, rr) => (l > 0 ? +(rr / l * 100).toFixed(2) : '');
     const aoa = [['Date', 'Day', 'Leads (created)', 'Retail DMS', 'Retail VOC (Call Out)', 'Total Retail', 'L2R%']];
     for (const x of view.shown) aoa.push([x.d + ' ' + MONTHS[view.mon - 1] + ' ' + view.year, x.wd, x.l, x.rd, x.rc, x.r, +x.l2r.toFixed(2)]);
     if (view.uL > 0 || view.uR > 0) aoa.push([noDayLabel, '', view.uL, view.nRd, view.nRc, view.uR, '']);
-    aoa.push(['∑ Total', '', view.tL, view.tRd, view.tRc, view.tR, +view.l2r.toFixed(2)]);
-    exportXlsx({ ['Day on Day ' + sel + (upd ? ' OU' : ' OC')]: aoa }, 'TVS_DayOnDay_' + sel.replace("'", '') + (upd ? '_OnUpdate' : '_OnCreate'));
+    aoa.push(['\u2211 Total', '', view.tL, view.tRd, view.tRc, view.tR, +view.l2r.toFixed(2)]);
+    const base = 'Day on Day ' + sel + (upd ? ' OU' : ' OC');
+    const fname = 'TVS_DayOnDay_' + sel.replace("'", '') + (upd ? '_OnUpdate' : '_OnCreate');
+    const ym = view.year * 100 + view.mon;
+    if (!(dx && dx.months.includes(ym))) { exportXlsx({ [base]: aoa }, fname); return; }
+
+    // Full detail for the filtered selection (same filters and rules as the tab).
+    const P = dailyPreds(dx, filters, maps);
+    const setTxt = (s, all) => (s && s.size ? [...s].join(', ') : all);
+    const fl = [['TVS Day on Day export'], [],
+      ['Month', sel], ['Basis', upd ? 'On Update (leads on creation day; retails on retail/attribution day)' : 'On Create (retails on the creation day of the lead)'],
+      ['Retail type shown', RT === 'dms' ? 'DMS only' : RT === 'co' ? 'Call Out (VOC) only' : 'DMS + Call Out (VOC)'],
+      ['Lead Type', setTxt(filters.leadTypes, 'All')], ['Source', setTxt(filters.sources, 'All')], ['Model', setTxt(filters.models, 'All')],
+      ['State', setTxt(filters.states, 'All')], ['City', setTxt(filters.cities, 'All')],
+      ['Purchased Model (retails only)', setTxt(filters.purchasedModels, 'All')], [],
+      ['Leads', view.tL], ['Retail DMS', view.tRd], ['Retail VOC (Call Out)', view.tRc], ['Total Retail', view.tR], ['L2R%', +view.l2r.toFixed(2)], [],
+      ['Sheets', 'Day on Day | By Model | By Source | By Lead Type | By State | By City | By Purchased Model | Lead detail | Retail detail'],
+      ['Note', 'Leads follow every filter except Purchased Model; Purchased Model only limits retails. Data is aggregated (no lead-level rows).']];
+
+    const A = dx.L, B = dx.R, K = upd ? B.ud : B.cd;
+    const M = dx.maps, CN = dx.cityName;
+    const leadRows = [['Lead creation date', 'Model', 'Source', 'Lead Type', 'State', 'City', 'Leads']];
+    const acc = { mdl: new Map(), src: new Map(), lt: new Map(), st: new Map(), city: new Map(), pm: new Map() };
+    const bump = (m, k, i, v) => { let e = m.get(k); if (!e) { e = [0, 0, 0]; m.set(k, e); } e[i] += v; };
+    for (let i = 0; i < A.n.length; i++) {
+      if (Math.floor(A.d[i] / 100) !== ym) continue;
+      if (!(P.okM[A.mi[i]] && P.okS[A.si[i]] && P.okT[A.lt[i]] && P.okSt[A.st[i]] && P.okC[A.ci[i]])) continue;
+      leadRows.push([dayTxt(A.d[i]), M.mdl[A.mi[i]], M.src[A.si[i]], M.lt[A.lt[i]], M.st[A.st[i]], CN[A.ci[i]], A.n[i]]);
+      bump(acc.mdl, M.mdl[A.mi[i]], 0, A.n[i]); bump(acc.src, M.src[A.si[i]], 0, A.n[i]); bump(acc.lt, M.lt[A.lt[i]], 0, A.n[i]);
+      bump(acc.st, M.st[A.st[i]], 0, A.n[i]); bump(acc.city, CN[A.ci[i]], 0, A.n[i]);
+    }
+    const retRows = [['Lead creation date', 'Retail date', 'Model (enquired)', 'Source', 'Lead Type', 'State', 'City', 'Purchased Model', 'Retail type', 'Retails']];
+    for (let i = 0; i < B.n.length; i++) {
+      if (Math.floor(K[i] / 100) !== ym || B.rt[i] === 2) continue;
+      if (B.rt[i] === 0 ? !showD : !showC) continue;
+      if (!(P.okM[B.mi[i]] && P.okS[B.si[i]] && P.okT[B.lt[i]] && P.okSt[B.st[i]] && P.okC[B.ci[i]])) continue;
+      if (P.pmSel && !P.pmSel.has(B.pm[i])) continue;
+      const rt = B.rt[i] === 0 ? 'DMS' : 'Call Out (VOC)', slot = B.rt[i] === 0 ? 1 : 2;
+      retRows.push([dayTxt(B.cd[i]), dayTxt(B.ud[i]), M.mdl[B.mi[i]], M.src[B.si[i]], M.lt[B.lt[i]], M.st[B.st[i]], CN[B.ci[i]], M.mdl[B.pm[i]], rt, B.n[i]]);
+      bump(acc.mdl, M.mdl[B.mi[i]], slot, B.n[i]); bump(acc.src, M.src[B.si[i]], slot, B.n[i]); bump(acc.lt, M.lt[B.lt[i]], slot, B.n[i]);
+      bump(acc.st, M.st[B.st[i]], slot, B.n[i]); bump(acc.city, CN[B.ci[i]], slot, B.n[i]); bump(acc.pm, M.mdl[B.pm[i]], slot, B.n[i]);
+    }
+    const byDim = (title, m, withLeads) => {
+      const rows = [...m.entries()].sort((x, y) => (y[1][0] + y[1][1] + y[1][2]) - (x[1][0] + x[1][1] + x[1][2]));
+      const out = [withLeads ? [title, 'Leads', 'Retail DMS', 'Retail VOC (Call Out)', 'Total Retail', 'L2R%'] : [title, 'Retail DMS', 'Retail VOC (Call Out)', 'Total Retail']];
+      let tl = 0, td = 0, tc = 0;
+      for (const [k, v] of rows) {
+        tl += v[0]; td += v[1]; tc += v[2];
+        out.push(withLeads ? [k, v[0], v[1], v[2], v[1] + v[2], pct(v[0], v[1] + v[2])] : [k, v[1], v[2], v[1] + v[2]]);
+      }
+      out.push(withLeads ? ['\u2211 Total', tl, td, tc, td + tc, pct(tl, td + tc)] : ['\u2211 Total', td, tc, td + tc]);
+      return out;
+    };
+    exportXlsx({
+      'Filters': fl, [base]: aoa,
+      'By Model': byDim('Model', acc.mdl, true), 'By Source': byDim('Source', acc.src, true), 'By Lead Type': byDim('Lead Type', acc.lt, true),
+      'By State': byDim('State', acc.st, true), 'By City': byDim('City', acc.city, true),
+      'By Purchased Model': byDim('Purchased Model', acc.pm, false),
+      'Lead detail': leadRows, 'Retail detail': retRows,
+    }, fname + '_AllData');
   };
 
   const navBtn = (label, disabled, onClick) => ce('button', {
