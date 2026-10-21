@@ -3651,14 +3651,13 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
       const L = new Array(cdim).fill(0), Rd = new Array(cdim).fill(0), Rc = new Array(cdim).fill(0);
       let uL = 0, uRd = 0, uRc = 0;                       // "no day recorded" parts of the month
       if (dx && dx.months.includes(cym)) {
-        const A = dx.L;
-        for (let i = 0; i < A.n.length; i++) {
+        const A = dx.L, B = dx.R, K = upd ? B.ud : B.cd;
+        for (let i = 0; i < A.n.length; i++) {          // leads: every filter except Purchased Model
           if (Math.floor(A.d[i] / 100) !== cym) continue;
           if (!(okM[A.mi[i]] && okS[A.si[i]] && okT[A.lt[i]] && okSt[A.st[i]] && okC[A.ci[i]])) continue;
           const d = A.d[i] % 100;
           if (d === 0 || d > cdim) uL += A.n[i]; else L[d - 1] += A.n[i];
         }
-        const B = dx.R, K = upd ? B.ud : B.cd;
         for (let i = 0; i < B.n.length; i++) {
           if (Math.floor(K[i] / 100) !== cym || B.rt[i] === 2) continue;
           if (!(okM[B.mi[i]] && okS[B.si[i]] && okT[B.lt[i]] && okSt[B.st[i]] && okC[B.ci[i]])) continue;
@@ -3813,7 +3812,7 @@ const DailyTab = React.memo(function DailyTab({ data, filters, months, RT, leads
       (upd
         ? '📅 On Update: leads are counted on the day they were created; retails on the day they were attributed (retail date), so the month total matches the Overview. '
         : '📅 On Create: leads are counted on the day they were created and retails are attributed to that creation day (recent days keep converting, so their L2R% rises). ') +
-      (view.exact ? 'All filters apply.' : 'Model, Source, Lead Type and State filters apply' + (filtersNA ? ' — City and Purchased Model filters are available for the latest 4 months only (not for ' + sel + ')' : '') + '.'));
+      (view.exact ? 'All filters apply (Purchased Model filters retails only, not leads).' : 'Model, Source, Lead Type and State filters apply' + (filtersNA ? ' — City and Purchased Model filters are available for the latest 4 months only (not for ' + sel + ')' : '') + '.'));
 
   const msgCard = (icon, title, body) => ce('div', { className: 'fade-up' }, noteBar, navCard(false),
     ce('div', { className: 'card', style: { padding: '40px 24px', textAlign: 'center', color: '#64748B' } },
