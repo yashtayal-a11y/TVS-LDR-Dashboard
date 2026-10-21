@@ -298,7 +298,7 @@ function classifySrc(s) {
   if (['organic'].some(p => n.includes(p))) return 'organic';
   return 'nonms';
 }
-function buildSrcGroups(srcList, waInPaid) {
+function buildSrcGroups(srcList, waInPaid = true) {   // WhatsApp counts inside PAID on every tab
   const adw = srcList.filter(s => classifySrc(s) === 'adwords');
   const fb  = srcList.filter(s => classifySrc(s) === 'msfb');
   const wa  = srcList.filter(s => classifySrc(s) === 'whatsapp');
@@ -1587,88 +1587,36 @@ const LTSourceTab = React.memo(function LTSourceTab({ data, filters, months, RT,
    ════════════════════════════════════════════════════════════════════ */
 const ModelSourceTab = React.memo(function ModelSourceTab({ data, filters, months, RT, viewerMode, pmMaps }) {
   const { maps, mm, univ: univRaw } = data;
-  const pmr  = data.pmr || [];
   const univ = univRaw || [];
   const getLR = useMemo(() => makeLR(data.rt_cols, RT), [data.rt_cols, RT]);
   const allSrcs = useMemo(() => [...new Set(maps.src)], [maps]);
-  const srcGroups = useMemo(() => buildSrcGroups(allSrcs, true), [allSrcs]);   // WhatsApp counts inside PAID on this tab
+  const srcGroups = useMemo(() => buildSrcGroups(allSrcs), [allSrcs]);
   const [expandedGrps, setExpandedGrps] = useState(new Set());
   const onToggleGrp = useCallback(id => setExpandedGrps(prev => {
     const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n;
   }), []);
 
-  /* Retail keyed by (mi|si|li) — ROW MODEL as the Purchased Model dimension.
-     Row X's retail = pmiSiLi.get("X|si|li") = total retail where pmi=X AND mi=X (loyal).
-     Only rows where pmi === mi are included: each model row shows its own loyal retail,
-     never cross-model records that pollute the total.
-     PM filter restricts which pmi values are eligible; if PM≠row-model, retail = 0.
-     PM standardisation is identical to pmr/Dispersion: pmi indices from maps.mdl. */
-  const pmiSiLi = useMemo(() => {
-    // PM filter now uses Retail Dispersion family names (maps.mdl_disp maps canonical → family).
-    // Expand each selected family to all pmi indices whose canonical model belongs to it.
-    const mdl_disp = maps.mdl_disp || maps.mdl;
-    const selPmiSet = (filters.purchasedModels && filters.purchasedModels.size > 0)
-      ? new Set(maps.mdl.map((_, i) => i).filter(i => filters.purchasedModels.has(mdl_disp[i])))
-      : null;
-    const m = new Map();
-    for (const row of pmr) {
-      const pmi = row[0], mi = row[1], si = row[2], li = row[3];
-      const R = row[4], Rd = row[5], Rc = row[6];
-      if (pmi !== mi) continue;                          // loyal rows only: pmi must equal mi
-      if (selPmiSet && !selPmiSet.has(pmi)) continue;
-      const k = pmi+'|'+si+'|'+li;
-      const e = m.get(k)||[0,0,0]; e[0]+=R; e[1]+=Rd; e[2]+=Rc; m.set(k,e);
-    }
-    return m;
-  }, [pmr, maps, filters.purchasedModels]);
-
+  /* Retail follows the SAME rule as every other tab, so identical filters give identical retail:
+       - no Purch. Model filter -> the table's own retail (all retails), honouring Month / Source / Model / State / Lead Type;
+       - Purch. Model filter     -> the shared PM overlay (retails whose purchased model is in the selection).
+     (The earlier "same-model only" count came from a table with no State / Lead Type dimension, so it ignored those
+     filters and did not tie to the Overview.) */
   const renderAgg = useCallback((M) => {
     const allMdl = !filters.models || filters.models.size === 0;
     const univF  = makeUnivFilter(filters);
     const pmRI   = RT === 'dms' ? 1 : RT === 'co' ? 2 : 0;
+    const dimFn  = (row, maps) => { const mdl = maps.mdl[row[0]]; return allMdl || filters.models.has(mdl) ? mdl : null; };
+    const srcFn  = (row, maps) => maps.src[row[1]];
 
     if (univF) {
       // univ path: mi=row[0], si=row[1], li=row[4]
-      // Leads:  from univ (lead-model dimension, unchanged)
-      // Retail: from pmiSiLi keyed by (mi|si|li) — loyal rows (pmi=mi) only.
-      //         Row X retail = retail where pm=X AND lead=X for that (si, li).
-      // seenRT dedup: prevents multiple sti/tti rows from multiplying the pmiSiLi lookup.
-      const seenRT = new Set();
-      const eff = row => {
-        const [l] = getLR(row);
-        const k = row[0]+'|'+row[1]+'|'+row[4];
-        if (seenRT.has(k)) return [l, 0];
-        seenRT.add(k);
-        const v = pmiSiLi.get(k);
-        return [l, v ? v[pmRI] : 0];
-      };
-      return aggMonth(
-        univ, maps, M, filters.sources,
-        (row,maps) => { const mdl=maps.mdl[row[0]]; return allMdl||filters.models.has(mdl) ? mdl : null; },
-        (row,maps) => maps.src[row[1]],
-        (row,maps) => maps.lm[row[4]],
-        univF, eff
-      );
+      const lr = pmMaps ? pmOverrideLRDedup(getLR, pmMaps.miSiLi, pmRI, row => row[0]+'|'+row[1]+'|'+row[4]) : getLR;
+      return aggMonth(univ, maps, M, filters.sources, dimFn, srcFn, (row, maps) => maps.lm[row[4]], univF, lr);
     }
-
     // mm path: mi=row[0], si=row[1], li=row[2]
-    // Leads:  from mm.L (lead-model dimension, unchanged)
-    // Retail: from pmiSiLi keyed by (mi|si|li) — treating mi as pmi
-    // Each (mi,si,li) is unique in mm so no dedup needed
-    const eff = row => {
-      const [l] = getLR(row);
-      const k = row[0]+'|'+row[1]+'|'+row[2];
-      const v = pmiSiLi.get(k);
-      return [l, v ? v[pmRI] : 0];
-    };
-    return aggMonth(
-      mm, maps, M, filters.sources,
-      (row,maps) => { const mdl=maps.mdl[row[0]]; return allMdl||filters.models.has(mdl) ? mdl : null; },
-      (row,maps) => maps.src[row[1]],
-      (row,maps) => maps.lm[row[2]],
-      null, eff
-    );
-  }, [mm, univ, maps, filters, getLR, pmiSiLi, RT]);
+    const lr = pmMaps ? pmOverrideLR(getLR, pmMaps.miSiLi, pmRI, row => row[0]+'|'+row[1]+'|'+row[2]) : getLR;
+    return aggMonth(mm, maps, M, filters.sources, dimFn, srcFn, (row, maps) => maps.lm[row[2]], null, lr);
+  }, [mm, univ, maps, filters, getLR, pmMaps, RT]);
 
   return ce(MonthlyGrids, { title:'Model × Source', months, renderAgg, srcGroups, dimLabel:'Model', expandedGrps, onToggleGrp, viewerMode });
 });
