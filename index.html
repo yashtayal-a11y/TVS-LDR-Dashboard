@@ -552,6 +552,109 @@ function aggAll(table, maps, monthFilter, srcFilter, dimKeyFn, srcKeyFn, monthKe
   return { grand: fin(gL,gR), grandSrc, dimAggs };
 }
 
+const MDL_OTHER = '(Other enquired models)';        // retails of other enquiries that bought the selected Purch. Model
+const LT_NA     = '(Lead Type n/a with City)';      // months without lead-type detail when a City is selected
+
+/* ════════════════════════════════════════════════════════════════════
+   RESOLVED UNIVERSE  — exact retails for Purch. Model / City combined with every other filter.
+   The main matrices have no City dimension and the purchased-model table has no State / Lead Type / City,
+   so for the latest 4 months (the daily detail file) the universe [mi,si,sti,tti,li,L,R,Rd,Rc] is rebuilt from
+   the daily file with every dimension:  leads follow Model / Source / Lead Type / State / City / Month;
+   retails follow Source / Lead Type / State / City / Month and, when a Purch. Model is selected, that Purch.
+   Model INSTEAD of the Model filter (retails of other enquired models are kept on a "(Other enquired models)"
+   row so the total is complete).  Older months fall back to the City x Source x Model table / purchased-model
+   overlay (approximate for State / Lead Type, see the notice shown on screen).
+   ════════════════════════════════════════════════════════════════════ */
+function buildResolved(d, dx, filters, upd) {
+  const mp = d.maps, has = s => !!(s && s.size);
+  const cityOn = has(filters.cities), pmOn = has(filters.purchasedModels);
+  if (!cityOn && !pmOn) return null;
+  const OTHER = mp.mdl.length, LTNA = mp.lt.length;
+  const maps2 = { ...mp, mdl: [...mp.mdl, MDL_OTHER], lt: [...mp.lt, LT_NA] };
+  const ymOf = lab => { const m = /([A-Za-z]+)'(\d+)/.exec(lab || ''); return m ? (2000 + +m[2]) * 100 + MONTHS.indexOf(m[1]) + 1 : 0; };
+  const lmYm = mp.lm.map(ymOf), liOfYm = new Map(); lmYm.forEach((y, i) => liOfYm.set(y, i));
+  const covered = new Set(dx ? dx.months : []);
+  const rows = new Map();
+  const add = (mi, si, sti, tti, li, L, R, Rd, Rc) => {
+    const k = mi + '|' + si + '|' + sti + '|' + tti + '|' + li;
+    let e = rows.get(k); if (!e) { e = [mi, si, sti, tti, li, 0, 0, 0, 0]; rows.set(k, e); }
+    e[5] += L; e[6] += R; e[7] += Rd; e[8] += Rc;
+  };
+  const up = v => String(v == null ? '' : v).trim().toUpperCase().replace(/^TVS\s+/, '');
+  const disp = mp.mdl_disp || [];
+  const pmIdx = new Set();
+  if (pmOn) { const want = new Set([...filters.purchasedModels].map(up)); mp.mdl.forEach((n, i) => { if (want.has(up(n)) || want.has(up(disp[i]))) pmIdx.add(i); }); }
+  const modelsOn = has(filters.models), statesOn = has(filters.states), ltOn = has(filters.leadTypes);
+  const mdlIn = i => !modelsOn || filters.models.has(mp.mdl[i]);
+
+  // months covered by the daily detail file: exact
+  if (dx && covered.size) {
+    const dm = dx.maps, idx = (arr, a) => a.map(n => arr.indexOf(n));
+    const M = idx(mp.mdl, dm.mdl), S = idx(mp.src, dm.src), T = idx(mp.lt, dm.lt), ST = idx(mp.st, dm.st);
+    const cityOk = dm.city.map(c => !cityOn || filters.cities.has(canonicalCity(c)));
+    const A = dx.L, B = dx.R, K = upd ? B.ud : B.cd;
+    for (let i = 0; i < A.n.length; i++) {
+      const ym = Math.floor(A.d[i] / 100); if (!covered.has(ym)) continue;
+      const li = liOfYm.get(ym); if (li == null || !cityOk[A.ci[i]]) continue;
+      const mi = M[A.mi[i]], si = S[A.si[i]], sti = ST[A.st[i]], tti = T[A.lt[i]];
+      if (mi < 0 || si < 0 || sti < 0 || tti < 0) continue;
+      add(mi, si, sti, tti, li, A.n[i], 0, 0, 0);
+    }
+    const pmSel = new Set();
+    if (pmOn) dm.mdl.forEach((n, i) => { if (pmIdx.has(M[i])) pmSel.add(i); });
+    for (let i = 0; i < B.n.length; i++) {
+      const ym = Math.floor(K[i] / 100); if (!covered.has(ym)) continue;
+      const li = liOfYm.get(ym); if (li == null || !cityOk[B.ci[i]]) continue;
+      if (pmOn && !pmSel.has(B.pm[i])) continue;
+      let mi = M[B.mi[i]]; const si = S[B.si[i]], sti = ST[B.st[i]], tti = T[B.lt[i]];
+      if (mi < 0 || si < 0 || sti < 0 || tti < 0) continue;
+      if (pmOn && modelsOn && !mdlIn(mi)) mi = OTHER;
+      const n = B.n[i];
+      add(mi, si, sti, tti, li, 0, n, B.rt[i] === 0 ? n : 0, B.rt[i] === 1 ? n : 0);
+    }
+  }
+
+  // older months: City x Source x Model table (city) or the main universe, plus the purchased-model overlay
+  const base = [];
+  if (cityOn) {
+    if (d.cxsm && d.cxsm.length && mp.city_state) {
+      const want = new Set(); mp.city.forEach((c, i) => { if (filters.cities.has(c)) want.add(i); });
+      for (const x of d.cxsm) {
+        if (!want.has(x[0]) || covered.has(lmYm[x[3]])) continue;
+        base.push([x[2], x[1], mp.city_state[x[0]], LTNA, x[3], x[4], x[5], x[6], x[7]]);
+      }
+    }
+  } else {
+    for (const x of (d.univ || [])) { if (!covered.has(lmYm[x[4]])) base.push(x.slice()); }
+  }
+  if (pmOn && base.length) {
+    for (const x of base) { x[6] = 0; x[7] = 0; x[8] = 0; }
+    const byMSL = new Map();
+    for (const x of base) { const k = x[0] + '|' + x[1] + '|' + x[4]; (byMSL.get(k) || byMSL.set(k, []).get(k)).push(x); }
+    const stF = statesOn ? mp.st.indexOf([...filters.states][0]) : 0;
+    const ttF = cityOn ? LTNA : (ltOn ? mp.lt.indexOf([...filters.leadTypes][0]) : 0);
+    const passes = x => (!statesOn || filters.states.has(mp.st[x[2]])) && (!ltOn || x[3] === LTNA || filters.leadTypes.has(mp.lt[x[3]]));
+    const target = (mi, si, li) => {
+      const k = mi + '|' + si + '|' + li; const list = byMSL.get(k) || [];
+      let t = list.find(passes);
+      if (!t) { t = [mi, si, stF, ttF, li, 0, 0, 0, 0]; list.push(t); byMSL.set(k, list); base.push(t); }
+      return t;
+    };
+    for (const x of (d.pmr || [])) {      // [pmi, mi, si, li, R, R_dms, R_co]
+      if (!pmIdx.has(x[0]) || covered.has(lmYm[x[3]])) continue;
+      const t = target(modelsOn && !mdlIn(x[1]) ? OTHER : x[1], x[2], x[3]);
+      t[6] += x[4]; t[7] += x[5]; t[8] += x[6];
+    }
+  }
+  for (const x of base) add(x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]);
+
+  return {
+    data: { ...d, univ: [...rows.values()], maps: maps2 },
+    filters: { ...filters, cities: new Set(), purchasedModels: new Set(),
+      models: modelsOn ? new Set([...filters.models, MDL_OTHER]) : filters.models, _cityView: true, _cityFilter: filters.cities },
+  };
+}
+
 /* Returns an extraFilter for univ rows [mi,si,sti,tti,li,...] enforcing
    model/state/leadType filters. Returns null when none are active. */
 function makeUnivFilter(filters) {
@@ -562,7 +665,7 @@ function makeUnivFilter(filters) {
   return (row, maps) => {
     if (!allMdl && !filters.models.has(maps.mdl[row[0]]))    return false;
     if (!allSt  && !filters.states.has(maps.st[row[2]]))     return false;
-    if (!allLT  && !filters.leadTypes.has(maps.lt[row[3]])) return false;
+    if (!allLT  && maps.lt[row[3]] !== LT_NA && !filters.leadTypes.has(maps.lt[row[3]])) return false;
     return true;
   };
 }
@@ -1581,7 +1684,7 @@ const LTSourceTab = React.memo(function LTSourceTab({ data, filters, months, RT,
       const eff = pmOverrideLRDedup(getLR, pmMaps && pmMaps.miSiLi, pmRI, row => row[0]+'|'+row[1]+'|'+row[4]);
       return aggMonth(
         univ, maps, M, filters.sources,
-        (row,maps) => { const lt=maps.lt[row[3]]; return allLT||filters.leadTypes.has(lt) ? lt : null; },
+        (row,maps) => { const lt=maps.lt[row[3]]; return allLT||lt===LT_NA||filters.leadTypes.has(lt) ? lt : null; },
         (row,maps) => maps.src[row[1]],
         (row,maps) => maps.lm[row[4]],
         univF, eff
@@ -2814,7 +2917,7 @@ const StateModelTab = React.memo(function StateModelTab({ data, filters, months,
       // needed here because we are aggregating leads (not doing a pmr retail lookup).
       const filtered = univ.filter(row => {
         if (!allSrc && !filters.sources.has(maps.src[row[1]]))    return false;
-        if (!allLT  && !filters.leadTypes.has(maps.lt[row[3]]))  return false;
+        if (!allLT  && maps.lt[row[3]] !== LT_NA && !filters.leadTypes.has(maps.lt[row[3]]))  return false;
         return true;
       });
       return buildCrossAgg(
@@ -2881,11 +2984,12 @@ const CityModelTab = React.memo(function CityModelTab({ data, filters, months, R
           }, [])
         )
       : null;
+    const cityF = (filters._cityFilter && filters._cityFilter.size) ? filters._cityFilter : filters.cities;   // the resolved view blanks filters.cities
     const cityRowFilter = stFilter
-      ? (filters.cities && filters.cities.size > 0
-          ? new Set([...stFilter].filter(c => filters.cities.has(c)))
+      ? (cityF && cityF.size > 0
+          ? new Set([...stFilter].filter(c => cityF.has(c)))
           : stFilter)
-      : filters.cities;
+      : cityF;
 
     if (useCxsm) {
       // Apply source filter by pre-filtering rows (src at index 1)
@@ -4131,6 +4235,20 @@ function App() {
     return buildPmMaps(effectiveData.pmr || [], filters.purchasedModels, effectiveData.maps);
   }, [effectiveData, filters.purchasedModels]);
 
+  // Daily detail file (Jul'26 onwards, every dimension) - loaded on demand when Purch. Model / City needs exact retails.
+  const needDx = !!(filters.cities && filters.cities.size) || !!(filters.purchasedModels && filters.purchasedModels.size);
+  const [dxData, setDxData] = useState(null);
+  useEffect(() => {
+    if (!needDx || !data) return;
+    let live = true;
+    loadDailyDetail().then(x => { if (live) setDxData(x && x.t === data.t ? x : false); });
+    return () => { live = false; };
+  }, [needDx, data && data.t]);
+  const resolved = useMemo(() => {
+    if (!effectiveData) return null;
+    return buildResolved(effectiveData, dxData || null, filters, leadsMode === 'update');
+  }, [effectiveData, dxData, filters, leadsMode]);
+
   // Global header-ribbon KPIs (Leads / Retail / L2R% / Retail-till-date).
   // Mirrors OverviewTab's own totals calc (city → model/state/LT-filtered
   // univ → plain source×month) so the ribbon always agrees with the
@@ -4147,7 +4265,15 @@ function App() {
     const hasCityFilter = filters.cities && filters.cities.size > 0 && cmD.length && maps.city;
     const pmRI  = RT === 'dms' ? 1 : RT === 'co' ? 2 : 0;
     let l = 0, r = 0;
-    if (hasCityFilter) {
+    if (resolved) {
+      const rm = resolved.data.maps, uf = makeUnivFilter(resolved.filters);
+      for (const row of resolved.data.univ) {
+        if (!allM && !filters.months.has(rm.lm[row[4]])) continue;
+        if (!allS && !filters.sources.has(rm.src[row[1]])) continue;
+        if (!uf(row, rm)) continue;
+        const [rl, rr] = getLR(row); l += rl; r += rr;
+      }
+    } else if (hasCityFilter) {
       for (const row of cmD) {
         if (!filters.cities.has(maps.city[row[0]])) continue;
         if (!allM && !filters.months.has(maps.lm[row[1]])) continue;
@@ -4179,7 +4305,7 @@ function App() {
       }
     }
     return { leads: l, retail: r, l2r: l > 0 ? r / l * 100 : 0 };
-  }, [effectiveData, filters, RT, pmMaps]);
+  }, [effectiveData, filters, RT, pmMaps, resolved]);
 
   const role       = auth ? auth.role : null;
   const viewerMode = role === 'viewer';
@@ -4187,27 +4313,13 @@ function App() {
     ? TABS.filter(t => ['modelxsrc','modelperf','statexmodel','geodealer','pivot'].includes(t.id))
     : TABS.filter(t => t.id !== 'daily' || role === 'admin');   // Day on Day: admins only
 
-  // City filter: the main matrices have no City dimension, so for the tabs below the Model x Source x Month
-  // universe is rebuilt from the City x Source x Model x Month table (leads and retails honour City + Month + Source +
-  // Model + State). That table has no Lead Type, so the Lead Type filter is dropped there (a notice says so).
+  // Tabs fed by the resolved universe (exact Purch. Model / City retails, see buildResolved).
   const CITY_TABS = ['overview','source','ltxsrc','modelxsrc','modelperf','statexmodel'];
-  const cityView = useMemo(() => {
-    const d = effectiveData;
-    if (!d || !filters.cities || filters.cities.size === 0 || !d.cxsm || !d.cxsm.length || !d.maps.city_state) return null;
-    const mp = d.maps, want = new Set(), ltNA = mp.lt.length;
-    mp.city.forEach((c, i) => { if (filters.cities.has(c)) want.add(i); });
-    const univC = [];
-    for (const r of d.cxsm) { if (want.has(r[0])) univC.push([r[2], r[1], mp.city_state[r[0]], ltNA, r[3], r[4], r[5], r[6], r[7]]); }
-    return {
-      data: { ...d, univ: univC, maps: { ...mp, lt: [...mp.lt, '(Lead Type n/a with City)'] } },
-      filters: { ...filters, cities: new Set(), leadTypes: new Set(), _cityView: true },
-    };
-  }, [effectiveData, filters]);
 
   const tabContent = useMemo(() => {
     if (!effectiveData) return null;
-    const cv = cityView && CITY_TABS.includes(tab) ? cityView : null;
-    const props = { data: cv ? cv.data : effectiveData, filters: cv ? cv.filters : filters, months, RT, viewerMode, leadsMode, pmMaps };
+    const cv = resolved && CITY_TABS.includes(tab) ? resolved : null;
+    const props = { data: cv ? cv.data : effectiveData, filters: cv ? cv.filters : filters, months, RT, viewerMode, leadsMode, pmMaps: cv ? null : pmMaps };
     switch (tab) {
       case 'overview':    return ce(OverviewTab,      props);
       case 'daily':       return role === 'admin' ? ce(DailyTab, props) : ce(OverviewTab, props);
@@ -4223,21 +4335,19 @@ function App() {
       case 'ageing':      return ce(RetailAgeingTab,   props);
       default: return null;
     }
-  }, [effectiveData, tab, filters, months, RT, viewerMode, leadsMode, role, pmMaps, cityView]);
+  }, [effectiveData, tab, filters, months, RT, viewerMode, leadsMode, role, pmMaps, resolved]);
 
   // Filters a tab cannot honour (shown as a notice instead of silently showing unfiltered numbers).
   const filterNotes = (() => {
     const on = s => !!(s && s.size > 0), f = filters, n = [];
     const cityOn = on(f.cities), pmOn = on(f.purchasedModels);
-    if (CITY_TABS.includes(tab)) {
-      if (cityOn && on(f.leadTypes)) n.push('Lead Type filter is not applied while a City is selected (there is no Lead Type split by City).');
-      if (cityOn && pmOn) n.push('Purch. Model retails are not available by City — they are shown for the other filters without the City.');
-      if (cityOn && tab === 'ltxsrc') n.push('Lead Type is not available by City — leads are shown as a single row.');
-    }
-    if (pmOn && (on(f.states) || on(f.leadTypes)) && ['overview','source','ltxsrc','modelxsrc','modelperf'].includes(tab))
-      n.push('Purch. Model retails are not available by State / Lead Type — retails follow Purch. Model, Month, Source and Model only (leads still follow every filter).');
-    if (tab === 'ltxsrc' && pmOn) n.push('Purch. Model retails cannot be split by Lead Type — leads and retails are shown as a single row.');
-    if ((tab === 'statexmodel' || tab === 'geodealer') && pmOn) n.push('Purch. Model filter is not applied on this tab (purchased-model retails are not available by State / City / Dealer).');
+    const olderSel = (months || []).some(m => { const x = /([A-Za-z]+)'(\d+)/.exec(m || ''); return x && (2000 + +x[2]) * 100 + MONTHS.indexOf(x[1]) + 1 < 202607; });
+    if (CITY_TABS.includes(tab) && (cityOn || pmOn) && olderSel)
+      n.push("Purch. Model and City are exact from Jul'26 onwards. For earlier months in the selection, Purch. Model retails ignore State, Lead Type and City, and City ignores Lead Type.");
+    if (tab === 'statexmodel' && pmOn) n.push('The City \u00d7 Model table at the bottom does not apply the Purch. Model filter.');
+    if (tab === 'geodealer' && pmOn) n.push('Purch. Model filter is not applied on this tab (purchased-model retails are not available by Dealer).');
+    if (tab === 'pivot' && pmOn && (on(f.states) || on(f.leadTypes) || cityOn))
+      n.push('Purch. Model retails are not split by State / Lead Type / City on this tab \u2014 retails follow Purch. Model, Month, Source and Model only.');
     if (tab === 'dispersion') {
       const na = [on(f.sources) && 'Source', on(f.leadTypes) && 'Lead Type', on(f.states) && 'State', cityOn && 'City', RT !== 'all' && 'Call Type (DMS / Call Out)'].filter(Boolean);
       if (na.length) n.push(na.join(', ') + ' filter' + (na.length > 1 ? 's' : '') + ' not applied on this tab — it follows Month, Model and Purch. Model only.');
