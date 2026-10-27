@@ -5279,12 +5279,16 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     };
     const allNeeded = [...new Set([...needed, ...filterDims])];
     let best = pick(allNeeded);
+    // State + City together: a city belongs to one state, so State is derived from the City column of a city table.
+    if (!best && allNeeded.includes('st') && allNeeded.includes('city')) best = pick(allNeeded.filter(d => d !== 'st'));
     // Dealer with State / City filters: no table carries all three, so State / City are applied through each dealer's main city.
     if (!best && needed.includes('dl')) best = pick(allNeeded.filter(d => d !== 'st' && d !== 'city'));
     return best;
   }, [rowDims, colDims, filters, data.pmx]);
 
   const isPmr = matConfig?.key === 'pmr' || matConfig?.key === 'pmx';
+  const stViaCity = !!matConfig && matConfig.dims.includes('city') && !matConfig.dims.includes('st') && !isPmr
+    && ([...rowDims, ...colDims].includes('st') || filters.states?.size > 0);
   const isPmrOld = matConfig?.key === 'pmr';
   const upd = leadsMode === 'update';
   const pmFilterOn = !!(filters.purchasedModels && filters.purchasedModels.size > 0);
@@ -5337,10 +5341,15 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     const c = mk('st',  filters.states,    maps.st);  if (c) sets.st  = c;
     const d = skipModels ? null : mk('mdl', filters.models, maps.mdl); if (d) sets.mdl = d;
     const e = mk('lt',  filters.leadTypes, maps.lt);  if (e) sets.lt  = e;
-    if (dims.includes('city') && filters.cities?.size > 0) {
+    const stOnCity = dims.includes('city') && !dims.includes('st') && filters.states?.size > 0;   // State filter applied through the city's state
+    if (dims.includes('city') && (filters.cities?.size > 0 || stOnCity)) {
       const cs = new Set();
-      (maps.city || []).forEach((v, i) => { if (filters.cities.has(v)) cs.add(i); });
-      if (cs.size) sets.city = cs;
+      (maps.city || []).forEach((v, i) => {
+        if (filters.cities?.size > 0 && !filters.cities.has(v)) return;
+        if (stOnCity) { const sti = (maps.city_state || [])[i]; if (sti == null || !filters.states.has((maps.st || [])[sti])) return; }
+        cs.add(i);
+      });
+      sets.city = cs;
     }
     return sets;
   };
@@ -5431,11 +5440,14 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     if (!matConfig || rawMatrix.length === 0) return null;
     const { dims } = matConfig;
     const nDims = dims.length;
-    const rPos0 = dims.indexOf(rowDims[0]);
-    const rPos1 = rowDims[1] ? dims.indexOf(rowDims[1]) : -1;
-    const cPos0 = dims.indexOf(colDims[0]);
-    const cPos1 = colDims[1] ? dims.indexOf(colDims[1]) : -1;
+    const stP = stViaCity ? dims.indexOf('city') : -1;
+    const posOf = d => d === 'st' && stP >= 0 ? -2 : dims.indexOf(d);   // -2: State taken from the row's city
+    const rPos0 = posOf(rowDims[0]);
+    const rPos1 = rowDims[1] ? posOf(rowDims[1]) : -1;
+    const cPos0 = posOf(colDims[0]);
+    const cPos1 = colDims[1] ? posOf(colDims[1]) : -1;
     const lbl   = (dim, idx) => ((dim === 'pmd' ? maps.mdl : maps[dim]) || [])[idx] ?? '#' + idx;
+    const at    = (row, pos) => pos === -2 ? (maps.city_state || [])[row[stP]] : row[pos];
 
     const tbl    = new Map();
     const colSet = new Set();
@@ -5451,10 +5463,10 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
       if (!ok) continue;
       if (dlHomeOk && !dlHomeOk.has(row[dims.indexOf('dl')])) continue;
 
-      const r1 = lbl(rowDims[0], row[rPos0]);
-      const r2 = rPos1 >= 0 ? lbl(rowDims[1], row[rPos1]) : null;
-      const c0 = lbl(colDims[0], row[cPos0]);
-      const ck = cPos1 >= 0 ? c0 + COL_SEP + lbl(colDims[1], row[cPos1]) : c0;
+      const r1 = lbl(rowDims[0], at(row, rPos0));
+      const r2 = rowDims[1] ? lbl(rowDims[1], at(row, rPos1)) : null;
+      const c0 = lbl(colDims[0], at(row, cPos0));
+      const ck = colDims[1] ? c0 + COL_SEP + lbl(colDims[1], at(row, cPos1)) : c0;
       colSet.add(ck);
 
       let ov = pmxMode ? [0, 0, 0] : null;      // retails come from the second pass
@@ -5501,7 +5513,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
       }
     }
     return { tbl, colLabels: [...colSet] };
-  }, [rawMatrix, matConfig, rowDims, colDims, filterSets, maps, pmInfo, pmxMode, pmxBase, filters, dlHomeOk]);
+  }, [rawMatrix, matConfig, rowDims, colDims, filterSets, maps, pmInfo, pmxMode, pmxBase, filters, dlHomeOk, stViaCity]);
 
   const pm = metrics[0] || 'leads'; // primary metric drives column ordering + sorting
 
@@ -5594,6 +5606,21 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     return topN > 0 ? rows.slice(0, topN) : rows;
   }, [pivotResult, pm, sortBy, sortDir, topN]);
 
+  // Second row dimension (children) follows the same Sort by / Order as the first.
+  function sortChildren(children) {
+    const arr = [...children];
+    arr.sort((a, b) => {
+      let av, bv;
+      if (sortBy === '__label__') { av = a[0]; bv = b[0]; }
+      else if (sortBy === '__total__') { av = rowTotal(a[1], pm); bv = rowTotal(b[1], pm); }
+      else { av = getMetricVal(a[1].get(sortBy), pm); bv = getMetricVal(b[1].get(sortBy), pm); }
+      if (av === bv) return 0;
+      if (typeof av === 'string') return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+      return sortDir === 'asc' ? av - bv : bv - av;
+    });
+    return arr;
+  }
+
   const grandTotals = useMemo(() => {
     if (!pivotResult) return { colVals: {}, gl: 0, gr: 0 };
     const colVals = {};
@@ -5614,7 +5641,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     const all = new Set([...rowDims, ...colDims]);
     const out = [];
     if (filters.sources?.size > 0 && !ds.has('src') && !all.has('src')) out.push('Source');
-    if (filters.states?.size  > 0 && !ds.has('st')  && !all.has('st'))  out.push('State');
+    if (filters.states?.size  > 0 && !ds.has('st')  && !all.has('st') && !stViaCity)  out.push('State');
     if (filters.models?.size  > 0 && !ds.has('mdl') && !all.has('mdl')) out.push('Model');
     if (matConfig.key === 'pmr') {
       if (filters.leadTypes?.size > 0) out.push('Lead Type');
@@ -5744,7 +5771,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
       if (!hasR2) { const r = [label]; pushCells(r, entry.sub); aoa.push(r); }
       else {
         const rSub = [label, 'Subtotal']; pushCells(rSub, entry.sub); aoa.push(rSub);
-        for (const [r2Lbl, cMap] of entry.children) {
+        for (const [r2Lbl, cMap] of sortChildren(entry.children)) {
           const rChild = ['', r2Lbl]; pushCells(rChild, cMap); aoa.push(rChild);
         }
       }
@@ -6244,7 +6271,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
             // Child rows (secondary dim, only when expanded)
             if (hasR2 && !isCollapsed) {
               let ci = 0;
-              for (const [r2Label, cMap] of entry.children) {
+              for (const [r2Label, cMap] of sortChildren(entry.children)) {
                 const cBg  = ci++%2===0 ? pal.cEven : pal.cOdd;
                 const cTxt = pal.txt;
                 rows.push(ce('tr', { key:`c_${label}_${r2Label}`, style:{ background:cBg } },
