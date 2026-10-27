@@ -5225,6 +5225,8 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     { key:'call',   label:'Call-Out'  },
   ];
 
+  const PMX_V2 = (data.pmx_v || 1) >= 2;
+  const PMX_DIMS = PMX_V2 ? ['pmd', 'mdl', 'src', 'st', 'lt', 'city', 'dl', 'lm'] : ['pmd', 'mdl', 'src', 'st', 'lt', 'city', 'lm'];
   const ALL_MATS = [
     { key:'sm',   dims:['src','lm']             },
     { key:'mm',   dims:['mdl','src','lm']        },
@@ -5245,10 +5247,9 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     { key:'mxdl', dims:['mdl','dl','lm']         },
     { key:'ltdl', dims:['lt','dl','lm']          },
     { key:'pmr',  dims:['pmd','mdl','src','lm']  },   // purchased model x enquired model x source x month (retails only)
-    { key:'pmx',  dims:['pmd','mdl','src','st','lt','city','lm'] },   // same, with state / lead type / city (retails only)
+    { key:'pmx',  dims: PMX_DIMS },   // same, with state / lead type / city (and dealer in v2) (retails only)
   ];
   const PMR_DIMS = ['pmd', 'mdl', 'src', 'lm'];
-  const PMX_DIMS = ['pmd', 'mdl', 'src', 'st', 'lt', 'city', 'lm'];
 
   const matConfig = useMemo(() => {
     const needed = [...rowDims, ...colDims];
@@ -5265,24 +5266,21 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     if (filters.leadTypes && filters.leadTypes.size > 0) filterDims.push('lt');
     if (filters.cities    && filters.cities.size    > 0) filterDims.push('city');
     if (filters.sources   && filters.sources.size   > 0) filterDims.push('src');
-    const pick = allNeeded => {
-      let best = null, bestExtra = 99;
-      for (const m of ALL_MATS) {
-        if (m.key === 'pmr' || m.key === 'pmx') continue;
-        if (!allNeeded.every(d => m.dims.includes(d))) continue;
-        const extra = m.dims.filter(d => !needed.includes(d) && d !== 'lm').length;
-        if (extra < bestExtra || (extra === bestExtra && m.dims.length < (best?.dims.length ?? 99))) {
-          bestExtra = extra; best = m;
-        }
+    // Rows / Columns must be in the table. State can also come from a City column (a city has one state); State / City
+    // filters can also be applied through a dealer's main city. The table covering the most active filters wins;
+    // filters it cannot cover are reported in the yellow notice.
+    let best = null, bestScore = -1, bestExtra = 99;
+    for (const m of ALL_MATS) {
+      if (m.key === 'pmr' || m.key === 'pmx') continue;
+      if (!needed.every(d => m.dims.includes(d) || (d === 'st' && m.dims.includes('city')))) continue;
+      const score = filterDims.filter(f => m.dims.includes(f)
+        || (f === 'st'   && (m.dims.includes('city') || m.dims.includes('dl')))
+        || (f === 'city' && m.dims.includes('dl'))).length;
+      const extra = m.dims.filter(d => !needed.includes(d) && d !== 'lm').length;
+      if (score > bestScore || (score === bestScore && (extra < bestExtra || (extra === bestExtra && m.dims.length < (best?.dims.length ?? 99))))) {
+        bestScore = score; bestExtra = extra; best = m;
       }
-      return best;
-    };
-    const allNeeded = [...new Set([...needed, ...filterDims])];
-    let best = pick(allNeeded);
-    // State + City together: a city belongs to one state, so State is derived from the City column of a city table.
-    if (!best && allNeeded.includes('st') && allNeeded.includes('city')) best = pick(allNeeded.filter(d => d !== 'st'));
-    // Dealer with State / City filters: no table carries all three, so State / City are applied through each dealer's main city.
-    if (!best && needed.includes('dl')) best = pick(allNeeded.filter(d => d !== 'st' && d !== 'city'));
+    }
     return best;
   }, [rowDims, colDims, filters, data.pmx]);
 
@@ -5294,11 +5292,13 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
   const pmFilterOn = !!(filters.purchasedModels && filters.purchasedModels.size > 0);
   const hasDl = [...rowDims, ...colDims].includes('dl');
   // Purch. Model filter + the exact table: leads come from the normal matrix, retails from pmx (any State / Lead Type / City / Month / Source / Model).
-  const pmxMode = pmFilterOn && !isPmr && !!(data.pmx && data.pmx.length) && !!matConfig && !hasDl;
+  const pmxMode = pmFilterOn && !isPmr && !!(data.pmx && data.pmx.length) && !!matConfig && (!hasDl || PMX_V2);
   const usePmx = matConfig?.key === 'pmx' || pmxMode;
-  // pmx row: [pmi, mi, si, sti, tti, cti, create-month, retail-month, R, Rd, Rc] -> [pmi, mi, si, sti, tti, cti, month, 0 leads, R, Rd, Rc]
+  // pmx row v1: [pmi, mi, si, sti, tti, cti, create-month, retail-month, R, Rd, Rc]; v2 adds dli after cti.
+  // Both become [...dims, month, 0 leads, R, Rd, Rc] in PMX_DIMS order.
   const pmxBase = useMemo(() => !usePmx ? null
-    : data.pmx.map(x => [x[0], x[1], x[2], x[3], x[4], x[5], upd ? x[7] : x[6], 0, x[8], x[9], x[10]]), [usePmx, data.pmx, upd]);
+    : PMX_V2 ? data.pmx.map(x => [x[0], x[1], x[2], x[3], x[4], x[5], x[6], upd ? x[8] : x[7], 0, x[9], x[10], x[11]])
+             : data.pmx.map(x => [x[0], x[1], x[2], x[3], x[4], x[5], upd ? x[7] : x[6], 0, x[8], x[9], x[10]]), [usePmx, data.pmx, upd, PMX_V2]);
   const PMR_NO = ['leads', 'retpct'];   // a lead has no purchased model until it retails
   const metrics = useMemo(() => {
     if (!isPmr) return metricsSel;
@@ -5356,10 +5356,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
   const filterSets = useMemo(() => matConfig ? buildSets(matConfig.dims, false) : {}, [matConfig, filters, maps]);
 
   // Dealer rows when the chosen table has no State / City: keep only dealers whose main city (most leads) matches.
-  const dlHomeOk = useMemo(() => {
-    if (!matConfig || !hasDl) return null;
-    const needSt = filters.states?.size > 0 && !matConfig.dims.includes('st');
-    const needCt = filters.cities?.size > 0 && !matConfig.dims.includes('city');
+  const dlHomeFor = (needSt, needCt) => {
     if (!needSt && !needCt) return null;
     const home = new Map(), best = new Map();
     for (const r of (data.cdm || [])) {
@@ -5373,7 +5370,14 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
       ok.add(dli);
     }
     return ok;
-  }, [matConfig, hasDl, filters, data.cdm, maps]);
+  };
+  const dlHomeOk = useMemo(() => !matConfig || !hasDl ? null : dlHomeFor(
+      filters.states?.size > 0 && !matConfig.dims.includes('st') && !matConfig.dims.includes('city'),
+      filters.cities?.size > 0 && !matConfig.dims.includes('city')),
+    [matConfig, hasDl, filters, data.cdm, maps]);
+  // Purch. Model retails by Dealer: State / City follow the dealer's main city, the same as the leads side.
+  const dlHomePm = useMemo(() => pmxMode && hasDl ? dlHomeFor(filters.states?.size > 0, filters.cities?.size > 0) : null,
+    [pmxMode, hasDl, filters, data.cdm, maps]);
 
   function getMetricVal(vals, m) {
     if (!vals) return 0;
@@ -5489,6 +5493,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     if (pmxMode && pmxBase) {
       const sel = resolvePmIdx(filters.purchasedModels, maps);
       const sets = buildSets(PMX_DIMS, true);
+      if (hasDl) { delete sets.st; delete sets.city; }
       const modelsOn = !!(filters.models && filters.models.size > 0);
       const pp = d => PMX_DIMS.indexOf(d);
       const rp0 = pp(rowDims[0]), rp1 = rowDims[1] ? pp(rowDims[1]) : -1, cp0 = pp(colDims[0]), cp1 = colDims[1] ? pp(colDims[1]) : -1;
@@ -5498,6 +5503,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
         let ok = true;
         for (const [dim, allowed] of Object.entries(sets)) if (!allowed.has(row[pp(dim)])) { ok = false; break; }
         if (!ok) continue;
+        if (hasDl && dlHomePm && !dlHomePm.has(row[pp('dl')])) continue;
         const r1 = lb(rowDims[0], row, rp0);
         const r2 = rp1 >= 0 ? lb(rowDims[1], row, rp1) : null;
         const c0 = lb(colDims[0], row, cp0);
@@ -5505,15 +5511,15 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
         colSet.add(ck);
         if (!tbl.has(r1)) tbl.set(r1, { sub: new Map(), children: new Map() });
         const e = tbl.get(r1);
-        accVals(e.sub, ck, row, 7);
+        accVals(e.sub, ck, row, PMX_DIMS.length);
         if (r2 !== null) {
           if (!e.children.has(r2)) e.children.set(r2, new Map());
-          accVals(e.children.get(r2), ck, row, 7);
+          accVals(e.children.get(r2), ck, row, PMX_DIMS.length);
         }
       }
     }
     return { tbl, colLabels: [...colSet] };
-  }, [rawMatrix, matConfig, rowDims, colDims, filterSets, maps, pmInfo, pmxMode, pmxBase, filters, dlHomeOk, stViaCity]);
+  }, [rawMatrix, matConfig, rowDims, colDims, filterSets, maps, pmInfo, pmxMode, pmxBase, filters, dlHomeOk, dlHomePm, stViaCity]);
 
   const pm = metrics[0] || 'leads'; // primary metric drives column ordering + sorting
 
@@ -5640,9 +5646,14 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     const ds  = new Set(matConfig.dims);
     const all = new Set([...rowDims, ...colDims]);
     const out = [];
+    const hasD = ds.has('dl');
     if (filters.sources?.size > 0 && !ds.has('src') && !all.has('src')) out.push('Source');
-    if (filters.states?.size  > 0 && !ds.has('st')  && !all.has('st') && !stViaCity)  out.push('State');
+    if (filters.states?.size  > 0 && !ds.has('st')  && !all.has('st') && !ds.has('city') && !hasD)  out.push('State');
     if (filters.models?.size  > 0 && !ds.has('mdl') && !all.has('mdl')) out.push('Model');
+    if (matConfig.key !== 'pmr' && matConfig.key !== 'pmx') {
+      if (filters.leadTypes?.size > 0 && !ds.has('lt'))   out.push('Lead Type');
+      if (filters.cities?.size    > 0 && !ds.has('city') && !hasD) out.push('City');
+    }
     if (matConfig.key === 'pmr') {
       if (filters.leadTypes?.size > 0) out.push('Lead Type');
       if (filters.cities?.size    > 0) out.push('City');
@@ -6016,7 +6027,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
       new Set(allDims).size < allDims.length
         ? 'A dimension cannot appear in both Rows and Columns.'
         : allDims.includes('pmd')
-        ? (data.pmx && data.pmx.length ? 'Purch. Model cannot be combined with Dealer.' : 'Purch. Model can be combined only with Model, Source and Month.')
+        ? (data.pmx && data.pmx.length ? (PMX_V2 ? 'This Purch. Model combination is not available.' : 'Purch. Model with Dealer needs the next pipeline run.') : 'Purch. Model can be combined only with Model, Source and Month.')
         : `The combination ${rowDims.map(k=>DIMS.find(d=>d.key===k)?.label||k).join(' + ')} × ${colDims.map(k=>DIMS.find(d=>d.key===k)?.label||k).join(' + ')} is not supported — no matching data matrix.`
     ),
 

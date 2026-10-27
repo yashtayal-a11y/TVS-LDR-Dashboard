@@ -2253,7 +2253,7 @@ def build_payload(all_leads, retail_map):
     disp, u_disp = {}, {}   # enquired_model × disp_purchased_model × month (retails only)
     disp_mdl_idx, disp_mdl_arr = {}, []   # separate dimension: Retail Dispersion family names
     pmr,  u_pmr  = {}, {}   # purch_model × enq_model × src × month → [R, R_dms, R_co] (retails only)
-    pmx = {}                # purch_model × enq_model × src × state × lead_type × city × create_month × retail_month → [R, R_dms, R_co]
+    pmx = {}                # purch_model × enq_model × src × state × lead_type × city × dealer × create_month × retail_month → [R, R_dms, R_co]
     cdm, csm, cdsm = {},{},{}
     dd = {}                 # Day-on-Day: lead-creation day x model x source x lead-type -> [L, R, R_dms, R_co]
     _dd_undated = 0
@@ -2492,7 +2492,7 @@ def build_payload(all_leads, retail_map):
             # Lead.opty_id = Retail.sourceLeadId (purchased model from the retail sheet; state / lead type / city / model /
             # source from the lead sheet). Holds both the create month (li) and the retail month (uli) so one table serves
             # On Create and On Update.
-            _pxk = (pmi, mi, si, sti, tti, cti, li, uli)
+            _pxk = (pmi, mi, si, sti, tti, cti, (dli if _dls is not None else -1), li, uli)
             _pxe = pmx.get(_pxk)
             if _pxe is None: _pxe = pmx[_pxk] = [0, 0, 0]
             _pxe[0] += 1
@@ -2617,9 +2617,9 @@ def build_payload(all_leads, retail_map):
         'stcm':    to_rows(stcm,  lambda k: list(map(int, k.split('|')))),
         'disp':    [[*map(int,k.split('|')), v] for k,v in disp.items()],
         'pmr':     [[*map(int,k.split('|')), *v] for k,v in pmr.items()],   # [pmi,mi,si,li,R,R_dms,R_co]
-        # [pmi, mi, si, sti, tti, cti, create-month li, retail-month li, R, R_dms, R_co]
+        # v2: [pmi, mi, si, sti, tti, cti, dli (-1 = none), create-month li, retail-month li, R, R_dms, R_co]
         'pmx':     [[*k, *v] for k, v in pmx.items()],
-        'pmx_v':   1,
+        'pmx_v':   2,
         'zm':      to_rows(zm,  lambda k: list(map(int, k.split('|')))),
         'bdm':     to_rows(bdm, lambda k: [int(k.split('|')[0])] + list(map(int, k.split('|')[1:]))),
         'cm':      to_rows(cm,  lambda k: list(map(int, k.split('|')))),
