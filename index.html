@@ -3143,6 +3143,7 @@ const GeoDealerTab = React.memo(function GeoDealerTab({ data, filters, months, R
 
     // Step 1 — aggregate leads and retails
     const dlMap = new Map(); // dli → { cti, leads, rets, open, booking, lost }
+    const cityTot = new Map(); // cti → all leads in that city under the current filters (City Share denominator)
 
     if (altMat) {
       const homeCt = new Map(), homeL = new Map();
@@ -3168,14 +3169,20 @@ const GeoDealerTab = React.memo(function GeoDealerTab({ data, filters, months, R
         rec.leads += l; rec.rets += r;
       }
       const cityLeads2 = new Map();
-      for (const [, rec] of dlMap) cityLeads2.set(rec.cti, (cityLeads2.get(rec.cti) || 0) + rec.leads);
+      if (hasMdlF && (data.cxm || []).length) {          // exact: all leads of the selected models in each city
+        for (const row of data.cxm) {
+          if (!altSet.has(maps.mdl[row[1]])) continue;
+          if (!allM && !monthSet.has(maps.lm[row[2]])) continue;
+          cityLeads2.set(row[0], (cityLeads2.get(row[0]) || 0) + row[row.length - 4]);
+        }
+      } else for (const [, rec] of dlMap) cityLeads2.set(rec.cti, (cityLeads2.get(rec.cti) || 0) + rec.leads);
       const out2 = [];
       for (const [dli, rec] of dlMap) {
         if (rec.leads === 0 && rec.rets === 0) continue;
         const sti = hasCities ? (cityStateArr[rec.cti] ?? null) : null;
         out2.push({ dealer: maps.dl[dli] || '—', city: hasCities ? (maps.city[rec.cti] || '—') : '—',
                     state: sti != null ? (maps.st[sti] || '—') : '—', leads: rec.leads, rets: rec.rets,
-                    cityShare: rec.leads / (cityLeads2.get(rec.cti) || 1) * 100,
+                    cityShare: Math.min(100, rec.leads / (cityLeads2.get(rec.cti) || 1) * 100),
                     convPct: rec.leads > 0 ? rec.rets / rec.leads * 100 : 0, open: 0, booking: 0, lost: 0 });
       }
       return out2;
@@ -3204,8 +3211,10 @@ const GeoDealerTab = React.memo(function GeoDealerTab({ data, filters, months, R
       if (hasSrcF && !filters.sources.has(maps.src[si])) continue;
       if (!applyFilters(cti, lmi)) continue;
       const l = row[row.length - 4];
-      if (!dlMap.has(dli)) dlMap.set(dli, { cti, leads:0, rets:0, open:0, booking:0, lost:0 });
+      cityTot.set(cti, (cityTot.get(cti) || 0) + l);
+      if (!dlMap.has(dli)) dlMap.set(dli, { cti, leads:0, rets:0, open:0, booking:0, lost:0, byCity:new Map() });
       const rec = dlMap.get(dli);
+      rec.byCity.set(cti, (rec.byCity.get(cti) || 0) + l);
       rec.leads += l;
       if (l > (rec._maxL || 0)) { rec.cti = cti; rec._maxL = l; }
     }
@@ -3236,8 +3245,7 @@ const GeoDealerTab = React.memo(function GeoDealerTab({ data, filters, months, R
     }
 
     // Step 3 — city totals for City Share denominator
-    const cityLeads = new Map(); // cti → total leads
-    for (const [, rec] of dlMap) cityLeads.set(rec.cti, (cityLeads.get(rec.cti) || 0) + rec.leads);
+    const cityLeads = cityTot;
 
     // Step 4 — build output rows
     const out = [];
@@ -3249,7 +3257,7 @@ const GeoDealerTab = React.memo(function GeoDealerTab({ data, filters, months, R
       const sti       = hasCities ? (cityStateArr[cti] ?? null) : null;
       const state     = sti != null ? (maps.st[sti] || '—') : '—';
       const cityTotal = cityLeads.get(cti) || 1;
-      const cityShare = rec.leads / cityTotal * 100;
+      const cityShare = Math.min(100, (rec.byCity.get(cti) || 0) / cityTotal * 100);   // dealer's leads in this city / all leads in this city
       const convPct   = rec.leads > 0 ? rec.rets / rec.leads * 100 : 0;
       out.push({ dealer, city, state, leads: rec.leads, rets: rec.rets,
                  cityShare, convPct, open: rec.open, booking: rec.booking, lost: rec.lost });
