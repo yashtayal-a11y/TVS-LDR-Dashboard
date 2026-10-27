@@ -5176,6 +5176,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
   const [metricsSel, setMetricsSel] = useState(['leads']);
   const [sortBy,     setSortBy]     = useState('__total__');
   const [sortDir,    setSortDir]    = useState('desc');
+  const [sortM,      setSortM]      = useState(null);   // metric used when sorting by a column (null = first selected metric)
   const [topN,       setTopN]       = useState(20);
   const [collapsed,  setCollapsed]  = useState(new Set());
   const [addRowOpen, setAddRowOpen] = useState(false);
@@ -5272,7 +5273,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     let best = null, bestScore = -1, bestExtra = 99;
     for (const m of ALL_MATS) {
       if (m.key === 'pmr' || m.key === 'pmx') continue;
-      if (!needed.every(d => m.dims.includes(d) || (d === 'st' && m.dims.includes('city')))) continue;
+      if (!needed.every(d => m.dims.includes(d) || (d === 'st' && (m.dims.includes('city') || m.dims.includes('dl'))) || (d === 'city' && m.dims.includes('dl')))) continue;
       const score = filterDims.filter(f => m.dims.includes(f)
         || (f === 'st'   && (m.dims.includes('city') || m.dims.includes('dl')))
         || (f === 'city' && m.dims.includes('dl'))).length;
@@ -5376,8 +5377,20 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
       filters.cities?.size > 0 && !matConfig.dims.includes('city')),
     [matConfig, hasDl, filters, data.cdm, maps]);
   // Purch. Model retails by Dealer: State / City follow the dealer's main city, the same as the leads side.
-  const dlHomePm = useMemo(() => pmxMode && hasDl ? dlHomeFor(filters.states?.size > 0, filters.cities?.size > 0) : null,
-    [pmxMode, hasDl, filters, data.cdm, maps]);
+  const dlHomePm = dlHomeOk;
+  // Dealer -> main city / state (used when State or City is shown next to Dealer in a table that has neither)
+  const homeMaps = useMemo(() => {
+    const city = new Map(), st = new Map(), best = new Map();
+    if (!hasDl) return { city, st };
+    for (const r of (data.cdm || [])) {
+      const l = r[r.length - 4];
+      if (l > (best.get(r[1]) || 0)) { best.set(r[1], l); city.set(r[1], r[0]); }
+    }
+    for (const [dli, cti] of city) st.set(dli, (maps.city_state || [])[cti]);
+    return { city, st };
+  }, [hasDl, data.cdm, maps]);
+  const stFromDl   = !!matConfig && hasDl && !matConfig.dims.includes('st') && !matConfig.dims.includes('city');
+  const cityFromDl = !!matConfig && hasDl && !matConfig.dims.includes('city');
 
   function getMetricVal(vals, m) {
     if (!vals) return 0;
@@ -5445,13 +5458,17 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     const { dims } = matConfig;
     const nDims = dims.length;
     const stP = stViaCity ? dims.indexOf('city') : -1;
-    const posOf = d => d === 'st' && stP >= 0 ? -2 : dims.indexOf(d);   // -2: State taken from the row's city
+    const dlP = dims.indexOf('dl');
+    // -2: State from the row's city; -3 / -4: State / City from the dealer's main city
+    const posOf = d => d === 'st' && stP >= 0 ? -2 : d === 'st' && stFromDl ? -3 : d === 'city' && cityFromDl ? -4 : dims.indexOf(d);
     const rPos0 = posOf(rowDims[0]);
     const rPos1 = rowDims[1] ? posOf(rowDims[1]) : -1;
     const cPos0 = posOf(colDims[0]);
     const cPos1 = colDims[1] ? posOf(colDims[1]) : -1;
     const lbl   = (dim, idx) => ((dim === 'pmd' ? maps.mdl : maps[dim]) || [])[idx] ?? '#' + idx;
-    const at    = (row, pos) => pos === -2 ? (maps.city_state || [])[row[stP]] : row[pos];
+    const at    = (row, pos) => pos === -2 ? (maps.city_state || [])[row[stP]]
+                              : pos === -3 ? homeMaps.st.get(row[dlP])
+                              : pos === -4 ? homeMaps.city.get(row[dlP]) : row[pos];
 
     const tbl    = new Map();
     const colSet = new Set();
@@ -5493,11 +5510,14 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     if (pmxMode && pmxBase) {
       const sel = resolvePmIdx(filters.purchasedModels, maps);
       const sets = buildSets(PMX_DIMS, true);
-      if (hasDl) { delete sets.st; delete sets.city; }
+      if (hasDl && dlHomePm) { delete sets.st; delete sets.city; }   // leads side uses the dealer's main city: do the same here
       const modelsOn = !!(filters.models && filters.models.size > 0);
       const pp = d => PMX_DIMS.indexOf(d);
       const rp0 = pp(rowDims[0]), rp1 = rowDims[1] ? pp(rowDims[1]) : -1, cp0 = pp(colDims[0]), cp1 = colDims[1] ? pp(colDims[1]) : -1;
-      const lb = (dim, row, pos) => (dim === 'mdl' && modelsOn && !filters.models.has(maps.mdl[row[pos]])) ? MDL_OTHER : lbl(dim, row[pos]);
+      const dlq = pp('dl');
+      const pv = (dim, row, pos) => hasDl && stFromDl && dim === 'st' ? homeMaps.st.get(row[dlq])
+                                  : hasDl && cityFromDl && dim === 'city' ? homeMaps.city.get(row[dlq]) : row[pos];
+      const lb = (dim, row, pos) => (dim === 'mdl' && modelsOn && !filters.models.has(maps.mdl[row[pos]])) ? MDL_OTHER : lbl(dim, pv(dim, row, pos));
       for (const row of pmxBase) {
         if (!sel.has(row[0])) continue;
         let ok = true;
@@ -5519,7 +5539,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
       }
     }
     return { tbl, colLabels: [...colSet] };
-  }, [rawMatrix, matConfig, rowDims, colDims, filterSets, maps, pmInfo, pmxMode, pmxBase, filters, dlHomeOk, dlHomePm, stViaCity]);
+  }, [rawMatrix, matConfig, rowDims, colDims, filterSets, maps, pmInfo, pmxMode, pmxBase, filters, dlHomeOk, dlHomePm, stViaCity, homeMaps, stFromDl, cityFromDl]);
 
   const pm = metrics[0] || 'leads'; // primary metric drives column ordering + sorting
 
@@ -5593,33 +5613,35 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     return groups;
   }, [orderedCols, colDims]);
 
+  const sm = sortM && metrics.includes(sortM) ? sortM : pm;   // metric the current column sort refers to
   const sortedRows = useMemo(() => {
     if (!pivotResult) return [];
     const rows = [];
     for (const [label, entry] of pivotResult.tbl) {
-      const total = rowTotal(entry.sub, pm);
+      const total = rowTotal(entry.sub, sortBy === '__total__' || sortBy === '__label2__' ? sm : pm);
       rows.push({ label, entry, total });
     }
     rows.sort((a, b) => {
-      let av, bv;
+      let av, bv, dir = sortDir;
       if (sortBy === '__total__') { av = a.total; bv = b.total; }
+      else if (sortBy === '__label2__') { av = a.total; bv = b.total; dir = 'desc'; }   // outer rows keep the biggest first
       else if (sortBy === '__label__') { av = a.label; bv = b.label; }
-      else { av = getMetricVal(a.entry.sub.get(sortBy), pm); bv = getMetricVal(b.entry.sub.get(sortBy), pm); }
+      else { av = getMetricVal(a.entry.sub.get(sortBy), sm); bv = getMetricVal(b.entry.sub.get(sortBy), sm); }
       if (av === bv) return 0;
-      if (typeof av === 'string') return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
-      return sortDir === 'asc' ? av - bv : bv - av;
+      if (typeof av === 'string') return dir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+      return dir === 'asc' ? av - bv : bv - av;
     });
     return topN > 0 ? rows.slice(0, topN) : rows;
-  }, [pivotResult, pm, sortBy, sortDir, topN]);
+  }, [pivotResult, pm, sm, sortBy, sortDir, topN]);
 
   // Second row dimension (children) follows the same Sort by / Order as the first.
   function sortChildren(children) {
     const arr = [...children];
     arr.sort((a, b) => {
       let av, bv;
-      if (sortBy === '__label__') { av = a[0]; bv = b[0]; }
-      else if (sortBy === '__total__') { av = rowTotal(a[1], pm); bv = rowTotal(b[1], pm); }
-      else { av = getMetricVal(a[1].get(sortBy), pm); bv = getMetricVal(b[1].get(sortBy), pm); }
+      if (sortBy === '__label__' || sortBy === '__label2__') { av = a[0]; bv = b[0]; }
+      else if (sortBy === '__total__') { av = rowTotal(a[1], sm); bv = rowTotal(b[1], sm); }
+      else { av = getMetricVal(a[1].get(sortBy), sm); bv = getMetricVal(b[1].get(sortBy), sm); }
       if (av === bv) return 0;
       if (typeof av === 'string') return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
       return sortDir === 'asc' ? av - bv : bv - av;
@@ -5695,7 +5717,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     const rs = (t.rows || []).filter(k => keys.has(k)), cs = (t.cols || []).filter(k => keys.has(k));
     setRowDims(rs.length ? rs : ['mdl']); setColDims(cs.length ? cs : ['lm']);
     setMetricsSel((t.metrics || []).length ? t.metrics : ['leads']);
-    setSortBy(t.sortBy || '__total__'); setSortDir(t.sortDir || 'desc'); setTopN(t.topN != null ? t.topN : 20);
+    setSortBy(t.sortBy || '__total__'); setSortDir(t.sortDir || 'desc'); setSortM(null); setTopN(t.topN != null ? t.topN : 20);
     setCollapsed(new Set());
     const f = t.filters || {}, S = a => new Set(a || []);
     onFiltersChange({ months: S(f.months), leadTypes: S(f.leadTypes), sources: S(f.sources), models: S(f.models),
@@ -6084,6 +6106,15 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
           const botTxt  = '#fff';
 
           // Label cell helper for row-dim columns
+          // Ascending / descending buttons on every column header
+          const sortBtns = (by, m) => ce('span', { style:{ marginLeft:6, whiteSpace:'nowrap', userSelect:'none' } },
+            ['asc', 'desc'].map(dir => ce('span', { key:dir,
+              title: dir === 'asc' ? 'Sort ascending' : 'Sort descending',
+              onClick: e => { e.stopPropagation(); setSortBy(by); setSortM(m || null); setSortDir(dir); },
+              style:{ cursor:'pointer', padding:'0 2px', fontSize:10,
+                      color: sortBy === by && sortDir === dir && (!m || sm === m) ? '#FDE047' : 'rgba(255,255,255,0.45)' }
+            }, dir === 'asc' ? '\u25B2' : '\u25BC')));
+
           const rowLabelTh = (dim, i, bg, txt, small) =>
             ce('th', { key:`rl_${dim}`,
               style:{ padding: small?'6px 16px':'10px 16px', textAlign:'left', fontWeight:700,
@@ -6093,9 +6124,8 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
                       background: bg,
                       minWidth: i===0 ? 140 : 110,
                       borderRight: i===rowDims.length-1 ? `1px solid ${txt==='#fff'?'rgba(255,255,255,0.15)':'rgba(0,0,0,0.1)'}` : 'none',
-                      cursor: i===0 ? 'pointer' : 'default', userSelect:'none' },
-              onClick: i===0 ? ()=>{ setSortBy('__label__'); setSortDir(d=>d==='asc'?'desc':'asc'); } : undefined
-            }, (DIMS.find(d=>d.key===dim)?.label||dim) + (i===0&&sortBy==='__label__'?(sortDir==='asc'?' ↑':' ↓'):''));
+                      userSelect:'none' }
+            }, (DIMS.find(d=>d.key===dim)?.label||dim), txt === '#fff' ? sortBtns(i === 0 ? '__label__' : '__label2__', null) : null);
 
           const rows = [];
 
@@ -6177,37 +6207,32 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
                             fontSize:11, color:botTxt, background:botBg,
                             borderLeft: mi===0&&groupBorder ? '1px solid rgba(255,255,255,0.15)'
                                        : mi===0&&ci>0&&!hasC2 ? '1px solid rgba(255,255,255,0.1)' : 'none' }
-                  }, METRICS.find(x=>x.key===m)?.label||m)
+                  }, METRICS.find(x=>x.key===m)?.label||m, sortBtns(ck, m))
                 );
               }
               // single metric
               const colLabel = hasC2
                 ? ck.slice(ck.indexOf(COL_SEP) + 1)
                 : ck;
-              const sortable = !hasC2;
               return [ce('th', { key:`bot_${ck}`,
                 style:{ padding: numHdrRows>1?'6px 12px':'10px 12px', textAlign:'right',
                         fontWeight:600, whiteSpace:'nowrap', minWidth: multiMetric?68:80,
                         color:botTxt, background:botBg,
                         borderLeft: groupBorder ? '1px solid rgba(255,255,255,0.15)'
                                    : ci>0&&!hasC2 ? '1px solid rgba(255,255,255,0.1)' : 'none',
-                        cursor: sortable ? 'pointer' : 'default', userSelect:'none' },
-                onClick: sortable ? ()=>{ setSortBy(ck); setSortDir(d=>d==='asc'?'desc':'asc'); } : undefined
-              }, colLabel + (sortable&&sortBy===ck?(sortDir==='asc'?' ↑':' ↓'):''))];
+                        userSelect:'none' }
+              }, colLabel, sortBtns(ck, metrics[0]))];
             }),
 
             // TOTAL header(s)
             ...metrics.map((m, mi) => {
-              const sortable = !multiMetric;
               return ce('th', { key:`btot_${m}`,
                 style:{ padding: numHdrRows>1?'6px 10px':'10px 12px', textAlign:'right',
                         fontWeight:700, whiteSpace:'nowrap',
                         fontSize: multiMetric?11:13, color:botTxt, background:botBg,
                         borderLeft: mi===0 ? '2px solid rgba(255,255,255,0.3)' : 'none',
-                        cursor: sortable ? 'pointer' : 'default', userSelect:'none' },
-                onClick: sortable ? ()=>{ setSortBy('__total__'); setSortDir(d=>d==='asc'?'desc':'asc'); } : undefined
-              }, multiMetric ? (METRICS.find(x=>x.key===m)?.label||m)
-                             : ('TOTAL'+(sortBy==='__total__'?(sortDir==='asc'?' ↑':' ↓'):'')));
+                        userSelect:'none' }
+              }, multiMetric ? (METRICS.find(x=>x.key===m)?.label||m) : 'TOTAL', sortBtns('__total__', m));
             })
           ));
 
