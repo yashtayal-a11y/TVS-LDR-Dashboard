@@ -6315,7 +6315,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
                 display = t > 0 ? t.toLocaleString() : '—';
               }
               return ce('td', { key:`gt_tot_${m}`,
-                style:{ padding:'10px 12px', textAlign:'right',
+                style:{ padding:'10px 12px', textAlign:'right', background:'#1E3A8A',
                         borderLeft: mi===0 ? '2px solid rgba(255,255,255,0.3)' : 'none', color:'#fff' }
               }, display);
             })
