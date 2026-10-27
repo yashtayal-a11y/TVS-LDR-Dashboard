@@ -3095,6 +3095,8 @@ const GeoDealerTab = React.memo(function GeoDealerTab({ data, filters, months, R
   const cdm      = data.cdm    || [];
   const u_cdm    = data.u_cdm  || [];
   const cdsm     = data.cdsm   || [];  // city × dealer × src × month (source-filterable)
+  const mxdl     = data.mxdl   || [];  // model × dealer × month
+  const ltdl     = data.ltdl   || [];  // lead type × dealer × month
   const u_cdsm   = data.u_cdsm || [];
   const dl_sn    = data.dl_sn  || [];
   const getLR    = useMemo(() => makeLR(data.rt_cols, RT), [data.rt_cols, RT]);
@@ -3105,7 +3107,11 @@ const GeoDealerTab = React.memo(function GeoDealerTab({ data, filters, months, R
 
   const hasDealers  = !!(maps.dl && cdm.length > 0);
   const hasCities   = !!(maps.city && maps.city_state);
-  const hasStatus   = dl_sn.length > 0;
+  const hasStatusAll = dl_sn.length > 0;
+  const mdlOn  = !!(filters.models    && filters.models.size    > 0 && mxdl.length > 0);
+  const ltOn   = !!(filters.leadTypes && filters.leadTypes.size > 0 && ltdl.length > 0);
+  const altOn  = mdlOn || ltOn;
+  const hasStatus   = hasStatusAll && !altOn;   // Open / Booking / Lost are not split by model or lead type
 
   // Pre-build month set for O(1) lookup
   const monthSet = useMemo(() => new Set(months), [months]);
@@ -3119,6 +3125,13 @@ const GeoDealerTab = React.memo(function GeoDealerTab({ data, filters, months, R
     const hasCF  = filters.cities  && filters.cities.size  > 0;
     const hasSF  = filters.states  && filters.states.size  > 0;
     const hasSrcF = filters.sources && filters.sources.size > 0;
+    const hasMdlF = filters.models    && filters.models.size    > 0 && mxdl.length > 0;
+    const hasLtF  = filters.leadTypes && filters.leadTypes.size > 0 && ltdl.length > 0;
+    // Model / Lead Type filter: the dealer x model (or x lead type) tables carry no city, so a dealer is placed in
+    // the city where it has most leads and the State / City filters are applied to that city.
+    const altMat  = hasMdlF ? mxdl : hasLtF ? ltdl : null;
+    const altSet  = hasMdlF ? filters.models : filters.leadTypes;
+    const altMap  = hasMdlF ? maps.mdl : maps.lt;
 
     // cdm  row: [cti, dli, li,     L, R, R_dms, R_co]  (7 elements)
     // cdsm row: [cti, dli, si, li, L, R, R_dms, R_co]  (8 elements)
@@ -3130,6 +3143,43 @@ const GeoDealerTab = React.memo(function GeoDealerTab({ data, filters, months, R
 
     // Step 1 — aggregate leads and retails
     const dlMap = new Map(); // dli → { cti, leads, rets, open, booking, lost }
+
+    if (altMat) {
+      const homeCt = new Map(), homeL = new Map();
+      for (const row of cdm) {
+        const l = row[row.length - 4];
+        if (l > (homeL.get(row[1]) || 0)) { homeL.set(row[1], l); homeCt.set(row[1], row[0]); }
+      }
+      const ctyOk = cti => {
+        if (hasCF && !filters.cities.has(maps.city[cti])) return false;
+        if (hasSF) { const sti = cityStateArr[cti]; if (sti == null || !filters.states.has(maps.st[sti])) return false; }
+        return true;
+      };
+      for (const row of altMat) {
+        const dli = row[1];
+        if (!altSet.has(altMap[row[0]])) continue;
+        if (!allM && !monthSet.has(maps.lm[row[2]])) continue;
+        const cti = homeCt.get(dli);
+        if (cti == null || !ctyOk(cti)) continue;
+        const l = row[row.length - 4];
+        const [, r] = getLR(row);
+        if (!dlMap.has(dli)) dlMap.set(dli, { cti, leads:0, rets:0, open:0, booking:0, lost:0 });
+        const rec = dlMap.get(dli);
+        rec.leads += l; rec.rets += r;
+      }
+      const cityLeads2 = new Map();
+      for (const [, rec] of dlMap) cityLeads2.set(rec.cti, (cityLeads2.get(rec.cti) || 0) + rec.leads);
+      const out2 = [];
+      for (const [dli, rec] of dlMap) {
+        if (rec.leads === 0 && rec.rets === 0) continue;
+        const sti = hasCities ? (cityStateArr[rec.cti] ?? null) : null;
+        out2.push({ dealer: maps.dl[dli] || '—', city: hasCities ? (maps.city[rec.cti] || '—') : '—',
+                    state: sti != null ? (maps.st[sti] || '—') : '—', leads: rec.leads, rets: rec.rets,
+                    cityShare: rec.leads / (cityLeads2.get(rec.cti) || 1) * 100,
+                    convPct: rec.leads > 0 ? rec.rets / rec.leads * 100 : 0, open: 0, booking: 0, lost: 0 });
+      }
+      return out2;
+    }
 
     function applyFilters(cti, lmi) {
       const m = maps.lm[lmi];
@@ -3205,7 +3255,7 @@ const GeoDealerTab = React.memo(function GeoDealerTab({ data, filters, months, R
                  cityShare, convPct, open: rec.open, booking: rec.booking, lost: rec.lost });
     }
     return out;
-  }, [cdm, u_cdm, cdsm, u_cdsm, dl_sn, maps, monthSet, filters, getLR, leadsMode, hasDealers, hasCities, hasStatus]);
+  }, [cdm, u_cdm, cdsm, u_cdsm, mxdl, ltdl, dl_sn, maps, monthSet, filters, getLR, leadsMode, hasDealers, hasCities, hasStatus]);
 
   // ── Filter (search) + sort ─────────────────────────────────────────────────
   const displayRows = useMemo(() => {
@@ -3302,6 +3352,12 @@ const GeoDealerTab = React.memo(function GeoDealerTab({ data, filters, months, R
           Nf(displayRows.length) + ' dealer' + (displayRows.length !== 1 ? 's' : ''))
       )
     ),
+
+    altOn && ce('div', {
+      style:{ padding:'7px 14px', background:'#EFF6FF', border:'1px solid #93C5FD', borderRadius:8,
+              fontSize:12, color:'#1E3A8A', marginBottom:12 }
+    }, '\u24D8  ' + (mdlOn ? 'Model' : 'Lead Type') + ' filter applied to Leads and Retails. Each dealer is placed in its main city for the State / City filters; Open / Booking / Lost are not split by '
+        + (mdlOn ? 'model' : 'lead type') + ' and Source' + (mdlOn && ltOn ? ' / Lead Type' : '') + ' is ignored here.'),
 
     // ── Summary KPIs ──────────────────────────────────────────────────────────
     (() => {
