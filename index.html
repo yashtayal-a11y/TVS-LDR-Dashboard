@@ -5265,16 +5265,22 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     if (filters.leadTypes && filters.leadTypes.size > 0) filterDims.push('lt');
     if (filters.cities    && filters.cities.size    > 0) filterDims.push('city');
     if (filters.sources   && filters.sources.size   > 0) filterDims.push('src');
-    const allNeeded = [...new Set([...needed, ...filterDims])];
-    let best = null, bestExtra = 99;
-    for (const m of ALL_MATS) {
-      if (m.key === 'pmr' || m.key === 'pmx') continue;
-      if (!allNeeded.every(d => m.dims.includes(d))) continue;
-      const extra = m.dims.filter(d => !needed.includes(d) && d !== 'lm').length;
-      if (extra < bestExtra || (extra === bestExtra && m.dims.length < (best?.dims.length ?? 99))) {
-        bestExtra = extra; best = m;
+    const pick = allNeeded => {
+      let best = null, bestExtra = 99;
+      for (const m of ALL_MATS) {
+        if (m.key === 'pmr' || m.key === 'pmx') continue;
+        if (!allNeeded.every(d => m.dims.includes(d))) continue;
+        const extra = m.dims.filter(d => !needed.includes(d) && d !== 'lm').length;
+        if (extra < bestExtra || (extra === bestExtra && m.dims.length < (best?.dims.length ?? 99))) {
+          bestExtra = extra; best = m;
+        }
       }
-    }
+      return best;
+    };
+    const allNeeded = [...new Set([...needed, ...filterDims])];
+    let best = pick(allNeeded);
+    // Dealer with State / City filters: no table carries all three, so State / City are applied through each dealer's main city.
+    if (!best && needed.includes('dl')) best = pick(allNeeded.filter(d => d !== 'st' && d !== 'city'));
     return best;
   }, [rowDims, colDims, filters, data.pmx]);
 
@@ -5339,6 +5345,26 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     return sets;
   };
   const filterSets = useMemo(() => matConfig ? buildSets(matConfig.dims, false) : {}, [matConfig, filters, maps]);
+
+  // Dealer rows when the chosen table has no State / City: keep only dealers whose main city (most leads) matches.
+  const dlHomeOk = useMemo(() => {
+    if (!matConfig || !hasDl) return null;
+    const needSt = filters.states?.size > 0 && !matConfig.dims.includes('st');
+    const needCt = filters.cities?.size > 0 && !matConfig.dims.includes('city');
+    if (!needSt && !needCt) return null;
+    const home = new Map(), best = new Map();
+    for (const r of (data.cdm || [])) {
+      const l = r[r.length - 4];
+      if (l > (best.get(r[1]) || 0)) { best.set(r[1], l); home.set(r[1], r[0]); }
+    }
+    const ok = new Set();
+    for (const [dli, cti] of home) {
+      if (needCt && !filters.cities.has((maps.city || [])[cti])) continue;
+      if (needSt) { const sti = (maps.city_state || [])[cti]; if (sti == null || !filters.states.has((maps.st || [])[sti])) continue; }
+      ok.add(dli);
+    }
+    return ok;
+  }, [matConfig, hasDl, filters, data.cdm, maps]);
 
   function getMetricVal(vals, m) {
     if (!vals) return 0;
@@ -5423,6 +5449,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
         if (!allowed.has(row[pos])) { ok = false; break; }
       }
       if (!ok) continue;
+      if (dlHomeOk && !dlHomeOk.has(row[dims.indexOf('dl')])) continue;
 
       const r1 = lbl(rowDims[0], row[rPos0]);
       const r2 = rPos1 >= 0 ? lbl(rowDims[1], row[rPos1]) : null;
@@ -5474,7 +5501,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
       }
     }
     return { tbl, colLabels: [...colSet] };
-  }, [rawMatrix, matConfig, rowDims, colDims, filterSets, maps, pmInfo, pmxMode, pmxBase, filters]);
+  }, [rawMatrix, matConfig, rowDims, colDims, filterSets, maps, pmInfo, pmxMode, pmxBase, filters, dlHomeOk]);
 
   const pm = metrics[0] || 'leads'; // primary metric drives column ordering + sorting
 
@@ -5939,6 +5966,11 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     }, isPmrOld
       ? '\u24D8  Purch. Model view: shows Retails only (a lead has no purchased model until it retails). It can be combined with Model (enquired), Source and Month; State / Lead Type / City filters are not applied here.'
       : '\u24D8  Purch. Model view: shows Retails only (a lead has no purchased model until it retails). It can be combined with Month, Model (enquired), Source, State, Lead Type and City.'),
+
+    dlHomeOk && ce('div', {
+      style:{ padding:'7px 14px', background:'#EFF6FF', border:'1px solid #93C5FD',
+              borderRadius:8, fontSize:12, color:'#1E3A8A', marginBottom:12 }
+    }, 'ⓘ  Dealer view: the State / City filters are applied through each dealer’s main city (the city where it has the most leads).'),
 
     pmxMode && filters.models?.size > 0 && ce('div', {
       style:{ padding:'7px 14px', background:'#EFF6FF', border:'1px solid #93C5FD',
