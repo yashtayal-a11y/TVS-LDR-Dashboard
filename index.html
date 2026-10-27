@@ -4387,7 +4387,7 @@ function App() {
       n.push("Purch. Model and City are exact from Jul'26 onwards. For earlier months in the selection, Purch. Model retails ignore State, Lead Type and City, and City ignores Lead Type.");
     if (tab === 'statexmodel' && pmOn) n.push('The City \u00d7 Model table at the bottom does not apply the Purch. Model filter.');
     if (tab === 'geodealer' && pmOn) n.push('Purch. Model filter is not applied on this tab (purchased-model retails are not available by Dealer).');
-    if (tab === 'pivot' && pmOn && (on(f.states) || on(f.leadTypes) || cityOn))
+    if (tab === 'pivot' && pmOn && !(effectiveData && effectiveData.pmx && effectiveData.pmx.length) && (on(f.states) || on(f.leadTypes) || cityOn))
       n.push('Purch. Model retails are not split by State / Lead Type / City on this tab \u2014 retails follow Purch. Model, Month, Source and Model only.');
     if (tab === 'dispersion') {
       const na = [on(f.sources) && 'Source', on(f.leadTypes) && 'Lead Type', on(f.states) && 'State', cityOn && 'City', RT !== 'all' && 'Call Type (DMS / Call Out)'].filter(Boolean);
@@ -5104,7 +5104,7 @@ function storePivotTpls(email, list) {
   catch (e) { return false; }
 }
 
-const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, pmMaps, onFiltersChange, setRT, userKey }) {
+const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leadsMode, pmMaps, onFiltersChange, setRT, userKey }) {
   const { maps } = data;
 
   const [rowDims,    setRowDims]    = useState(['mdl']);
@@ -5181,14 +5181,19 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, pmMap
     { key:'mxdl', dims:['mdl','dl','lm']         },
     { key:'ltdl', dims:['lt','dl','lm']          },
     { key:'pmr',  dims:['pmd','mdl','src','lm']  },   // purchased model x enquired model x source x month (retails only)
+    { key:'pmx',  dims:['pmd','mdl','src','st','lt','city','lm'] },   // same, with state / lead type / city (retails only)
   ];
   const PMR_DIMS = ['pmd', 'mdl', 'src', 'lm'];
+  const PMX_DIMS = ['pmd', 'mdl', 'src', 'st', 'lt', 'city', 'lm'];
 
   const matConfig = useMemo(() => {
     const needed = [...rowDims, ...colDims];
     if (new Set(needed).size < needed.length) return null; // any dim repeated
-    if (needed.includes('pmd'))                            // Purch. Model: only the pmr matrix carries it
-      return needed.every(d => PMR_DIMS.includes(d)) ? ALL_MATS.find(m => m.key === 'pmr') : null;
+    if (needed.includes('pmd')) {                          // Purch. Model: only the pmx (or older pmr) matrix carries it
+      const full = !!(data.pmx && data.pmx.length);
+      const ds = full ? PMX_DIMS : PMR_DIMS;
+      return needed.every(d => ds.includes(d)) ? ALL_MATS.find(m => m.key === (full ? 'pmx' : 'pmr')) : null;
+    }
     // Include active filter dims so the selected matrix can honour them
     const filterDims = [];
     if (filters.models    && filters.models.size    > 0) filterDims.push('mdl');
@@ -5199,7 +5204,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, pmMap
     const allNeeded = [...new Set([...needed, ...filterDims])];
     let best = null, bestExtra = 99;
     for (const m of ALL_MATS) {
-      if (m.key === 'pmr') continue;
+      if (m.key === 'pmr' || m.key === 'pmx') continue;
       if (!allNeeded.every(d => m.dims.includes(d))) continue;
       const extra = m.dims.filter(d => !needed.includes(d) && d !== 'lm').length;
       if (extra < bestExtra || (extra === bestExtra && m.dims.length < (best?.dims.length ?? 99))) {
@@ -5207,9 +5212,19 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, pmMap
       }
     }
     return best;
-  }, [rowDims, colDims, filters]);
+  }, [rowDims, colDims, filters, data.pmx]);
 
-  const isPmr = matConfig?.key === 'pmr';
+  const isPmr = matConfig?.key === 'pmr' || matConfig?.key === 'pmx';
+  const isPmrOld = matConfig?.key === 'pmr';
+  const upd = leadsMode === 'update';
+  const pmFilterOn = !!(filters.purchasedModels && filters.purchasedModels.size > 0);
+  const hasDl = [...rowDims, ...colDims].includes('dl');
+  // Purch. Model filter + the exact table: leads come from the normal matrix, retails from pmx (any State / Lead Type / City / Month / Source / Model).
+  const pmxMode = pmFilterOn && !isPmr && !!(data.pmx && data.pmx.length) && !!matConfig && !hasDl;
+  const usePmx = matConfig?.key === 'pmx' || pmxMode;
+  // pmx row: [pmi, mi, si, sti, tti, cti, create-month, retail-month, R, Rd, Rc] -> [pmi, mi, si, sti, tti, cti, month, 0 leads, R, Rd, Rc]
+  const pmxBase = useMemo(() => !usePmx ? null
+    : data.pmx.map(x => [x[0], x[1], x[2], x[3], x[4], x[5], upd ? x[7] : x[6], 0, x[8], x[9], x[10]]), [usePmx, data.pmx, upd]);
   const PMR_NO = ['leads', 'retpct'];   // a lead has no purchased model until it retails
   const metrics = useMemo(() => {
     if (!isPmr) return metricsSel;
@@ -5219,6 +5234,12 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, pmMap
 
   const rawMatrix = useMemo(() => {
     if (!matConfig) return [];
+    if (matConfig.key === 'pmx') {
+      if (!pmxBase) return [];
+      if (!pmFilterOn) return pmxBase;
+      const sel = resolvePmIdx(filters.purchasedModels, maps);
+      return pmxBase.filter(x => sel.has(x[0]));
+    }
     if (matConfig.key === 'pmr') {
       const selOn = filters.purchasedModels && filters.purchasedModels.size > 0;
       const sel = resolvePmIdx(filters.purchasedModels, maps);
@@ -5230,11 +5251,10 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, pmMap
       return out;
     }
     return data[matConfig.key] || [];
-  }, [data, matConfig, filters.purchasedModels, maps]);
+  }, [data, matConfig, filters.purchasedModels, maps, pmxBase, pmFilterOn]);
 
-  const filterSets = useMemo(() => {
-    if (!matConfig) return {};
-    const { dims } = matConfig;
+  // skipModels: Purch. Model retails replace the Model filter (the filter then applies to leads only).
+  const buildSets = (dims, skipModels) => {
     const mk = (dim, fSet, arr) => {
       if (!dims.includes(dim) || !fSet || fSet.size === 0) return null;
       const s = new Set();
@@ -5245,7 +5265,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, pmMap
     const a = mk('lm',  filters.months,    maps.lm);  if (a) sets.lm  = a;
     const b = mk('src', filters.sources,   maps.src); if (b) sets.src = b;
     const c = mk('st',  filters.states,    maps.st);  if (c) sets.st  = c;
-    const d = mk('mdl', filters.models,    maps.mdl); if (d) sets.mdl = d;
+    const d = skipModels ? null : mk('mdl', filters.models, maps.mdl); if (d) sets.mdl = d;
     const e = mk('lt',  filters.leadTypes, maps.lt);  if (e) sets.lt  = e;
     if (dims.includes('city') && filters.cities?.size > 0) {
       const cs = new Set();
@@ -5253,7 +5273,8 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, pmMap
       if (cs.size) sets.city = cs;
     }
     return sets;
-  }, [matConfig, filters, maps]);
+  };
+  const filterSets = useMemo(() => matConfig ? buildSets(matConfig.dims, false) : {}, [matConfig, filters, maps]);
 
   function getMetricVal(vals, m) {
     if (!vals) return 0;
@@ -5299,7 +5320,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, pmMap
   // Purch. Model filter: pmr only carries (enquired model, source, month), so retails can be
   // restricted to the chosen purchased models exactly only when the pivot uses just those dims.
   const pmInfo = useMemo(() => {
-    if (!pmMaps || !matConfig || matConfig.key === 'pmr') return null;
+    if (!pmMaps || !matConfig || isPmr || pmxMode) return null;
     const dims = matConfig.dims;
     const pivotDims = [...rowDims, ...colDims];
     const capable = pivotDims.every(d => d === 'mdl' || d === 'src' || d === 'lm');
@@ -5312,7 +5333,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, pmMap
     }
     const otherFilters = (filters.states?.size > 0) || (filters.leadTypes?.size > 0) || (filters.cities?.size > 0);
     return { keyOf, map, blocked: !keyOf, approx: !!keyOf && otherFilters };
-  }, [pmMaps, matConfig, rowDims, colDims, filters]);
+  }, [pmMaps, matConfig, rowDims, colDims, filters, isPmr, pmxMode]);
 
   // tbl: Map<r1Label, { sub: Map<cKey,vals>, children: Map<r2Label, Map<cKey,vals>> }>
   // cKey is colDims[0] label when 1 col dim, or "c0\x00c1" when 2 col dims
@@ -5345,7 +5366,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, pmMap
       const ck = cPos1 >= 0 ? c0 + COL_SEP + lbl(colDims[1], row[cPos1]) : c0;
       colSet.add(ck);
 
-      let ov = null;
+      let ov = pmxMode ? [0, 0, 0] : null;      // retails come from the second pass
       if (pmInfo) {
         if (pmInfo.keyOf) {
           const k = pmInfo.keyOf(row);
@@ -5362,8 +5383,34 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, pmMap
         accVals(e.children.get(r2), ck, row, nDims, ov);
       }
     }
+    if (pmxMode && pmxBase) {
+      const sel = resolvePmIdx(filters.purchasedModels, maps);
+      const sets = buildSets(PMX_DIMS, true);
+      const modelsOn = !!(filters.models && filters.models.size > 0);
+      const pp = d => PMX_DIMS.indexOf(d);
+      const rp0 = pp(rowDims[0]), rp1 = rowDims[1] ? pp(rowDims[1]) : -1, cp0 = pp(colDims[0]), cp1 = colDims[1] ? pp(colDims[1]) : -1;
+      const lb = (dim, row, pos) => (dim === 'mdl' && modelsOn && !filters.models.has(maps.mdl[row[pos]])) ? MDL_OTHER : lbl(dim, row[pos]);
+      for (const row of pmxBase) {
+        if (!sel.has(row[0])) continue;
+        let ok = true;
+        for (const [dim, allowed] of Object.entries(sets)) if (!allowed.has(row[pp(dim)])) { ok = false; break; }
+        if (!ok) continue;
+        const r1 = lb(rowDims[0], row, rp0);
+        const r2 = rp1 >= 0 ? lb(rowDims[1], row, rp1) : null;
+        const c0 = lb(colDims[0], row, cp0);
+        const ck = cp1 >= 0 ? c0 + COL_SEP + lb(colDims[1], row, cp1) : c0;
+        colSet.add(ck);
+        if (!tbl.has(r1)) tbl.set(r1, { sub: new Map(), children: new Map() });
+        const e = tbl.get(r1);
+        accVals(e.sub, ck, row, 7);
+        if (r2 !== null) {
+          if (!e.children.has(r2)) e.children.set(r2, new Map());
+          accVals(e.children.get(r2), ck, row, 7);
+        }
+      }
+    }
     return { tbl, colLabels: [...colSet] };
-  }, [rawMatrix, matConfig, rowDims, colDims, filterSets, maps, pmInfo]);
+  }, [rawMatrix, matConfig, rowDims, colDims, filterSets, maps, pmInfo, pmxMode, pmxBase, filters]);
 
   const pm = metrics[0] || 'leads'; // primary metric drives column ordering + sorting
 
@@ -5825,7 +5872,14 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, pmMap
     isPmr && ce('div', {
       style:{ padding:'7px 14px', background:'#EFF6FF', border:'1px solid #93C5FD',
               borderRadius:8, fontSize:12, color:'#1E3A8A', marginBottom:12 }
-    }, '\u24D8  Purch. Model view: shows Retails only (a lead has no purchased model until it retails). It can be combined with Model (enquired), Source and Month; State / Lead Type / City filters are not applied here.'),
+    }, isPmrOld
+      ? '\u24D8  Purch. Model view: shows Retails only (a lead has no purchased model until it retails). It can be combined with Model (enquired), Source and Month; State / Lead Type / City filters are not applied here.'
+      : '\u24D8  Purch. Model view: shows Retails only (a lead has no purchased model until it retails). It can be combined with Month, Model (enquired), Source, State, Lead Type and City.'),
+
+    pmxMode && filters.models?.size > 0 && ce('div', {
+      style:{ padding:'7px 14px', background:'#EFF6FF', border:'1px solid #93C5FD',
+              borderRadius:8, fontSize:12, color:'#1E3A8A', marginBottom:12 }
+    }, '\u24D8  Purch. Model is selected: the Model filter applies to leads only. Retails follow the purchased model; retails of other enquired models appear as "' + MDL_OTHER + '" when Model is a row or column.'),
 
     pmInfo && (pmInfo.blocked || pmInfo.approx) && ce('div', {
       style:{ padding:'7px 14px', background:'#FFF3CD', border:'1px solid #F5A623',
@@ -5839,7 +5893,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, pmMap
       new Set(allDims).size < allDims.length
         ? 'A dimension cannot appear in both Rows and Columns.'
         : allDims.includes('pmd')
-        ? 'Purch. Model can be combined only with Model, Source and Month.'
+        ? (data.pmx && data.pmx.length ? 'Purch. Model cannot be combined with Dealer.' : 'Purch. Model can be combined only with Model, Source and Month.')
         : `The combination ${rowDims.map(k=>DIMS.find(d=>d.key===k)?.label||k).join(' + ')} × ${colDims.map(k=>DIMS.find(d=>d.key===k)?.label||k).join(' + ')} is not supported — no matching data matrix.`
     ),
 

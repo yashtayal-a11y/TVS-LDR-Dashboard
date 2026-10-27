@@ -2253,6 +2253,7 @@ def build_payload(all_leads, retail_map):
     disp, u_disp = {}, {}   # enquired_model × disp_purchased_model × month (retails only)
     disp_mdl_idx, disp_mdl_arr = {}, []   # separate dimension: Retail Dispersion family names
     pmr,  u_pmr  = {}, {}   # purch_model × enq_model × src × month → [R, R_dms, R_co] (retails only)
+    pmx = {}                # purch_model × enq_model × src × state × lead_type × city × create_month × retail_month → [R, R_dms, R_co]
     cdm, csm, cdsm = {},{},{}
     dd = {}                 # Day-on-Day: lead-creation day x model x source x lead-type -> [L, R, R_dms, R_co]
     _dd_undated = 0
@@ -2487,6 +2488,17 @@ def build_payload(all_leads, retail_map):
                 if 'DMS'  in _rt_u2: _pmr_d[_pmr_k][1] += 1
                 elif 'CALL' in _rt_u2: _pmr_d[_pmr_k][2] += 1
 
+            # pmx: the same purchased-model retails carrying the lead-level dimensions, joined through
+            # Lead.opty_id = Retail.sourceLeadId (purchased model from the retail sheet; state / lead type / city / model /
+            # source from the lead sheet). Holds both the create month (li) and the retail month (uli) so one table serves
+            # On Create and On Update.
+            _pxk = (pmi, mi, si, sti, tti, cti, li, uli)
+            _pxe = pmx.get(_pxk)
+            if _pxe is None: _pxe = pmx[_pxk] = [0, 0, 0]
+            _pxe[0] += 1
+            if 'DMS'  in _rt_u2: _pxe[1] += 1
+            elif 'CALL' in _rt_u2: _pxe[2] += 1
+
             # ── Retail Ageing (On Create, lead month attribution) ──────────────
             _ram_total += 1
             _rd = retail_map[lid].get('rd')
@@ -2605,6 +2617,9 @@ def build_payload(all_leads, retail_map):
         'stcm':    to_rows(stcm,  lambda k: list(map(int, k.split('|')))),
         'disp':    [[*map(int,k.split('|')), v] for k,v in disp.items()],
         'pmr':     [[*map(int,k.split('|')), *v] for k,v in pmr.items()],   # [pmi,mi,si,li,R,R_dms,R_co]
+        # [pmi, mi, si, sti, tti, cti, create-month li, retail-month li, R, R_dms, R_co]
+        'pmx':     [[*k, *v] for k, v in pmx.items()],
+        'pmx_v':   1,
         'zm':      to_rows(zm,  lambda k: list(map(int, k.split('|')))),
         'bdm':     to_rows(bdm, lambda k: [int(k.split('|')[0])] + list(map(int, k.split('|')[1:]))),
         'cm':      to_rows(cm,  lambda k: list(map(int, k.split('|')))),
