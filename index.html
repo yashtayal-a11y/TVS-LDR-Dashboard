@@ -875,7 +875,11 @@ const FILTER_CLEARED = Object.freeze(new Set(['\x00']));
 
 const MultiSelect = React.memo(function MultiSelect({ label, options, selected, onChange }) {
   const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
   const ref = useRef();
+  useEffect(() => { if (!open) setQ(''); }, [open]);
+  const needle = q.trim().toLowerCase();
+  const shown = needle ? options.filter(o => String(o).toLowerCase().includes(needle)) : options;
 
   useEffect(() => {
     function hdl(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
@@ -921,8 +925,15 @@ const MultiSelect = React.memo(function MultiSelect({ label, options, selected, 
           ce('button', { onClick: clearFilter, style:{fontSize:10,background:'none',border:'none',color:'#64748B',cursor:'pointer',fontWeight:700} }, 'Clear')
         )
       ),
+      options.length > 6 && ce('div', { style:{ padding:'6px 10px', borderBottom:'1px solid #E2E8F0' } },
+        ce('input', { type:'text', value:q, placeholder:'Type to search\u2026', autoFocus:true,
+          onChange: e => setQ(e.target.value),
+          onKeyDown: e => { if (e.key === 'Escape') setOpen(false); },
+          style:{ width:'100%', boxSizing:'border-box', fontSize:12, padding:'5px 8px', border:'1px solid #CBD5E1', borderRadius:6, outline:'none', fontFamily:'inherit' } })
+      ),
       ce('div', { className:'ms-dropdown-list' },
-        options.map(opt => ce('label', { key:opt, className:'ms-option' },
+        shown.length === 0 && ce('div', { style:{ padding:'10px 14px', fontSize:12, color:'#94A3B8' } }, 'No match'),
+        shown.map(opt => ce('label', { key:opt, className:'ms-option' },
           ce('input', {
             type:'checkbox', checked: !isClear && (isAll || selected.has(opt)),
             onChange: () => toggle(opt)
@@ -5177,6 +5188,8 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
   const [sortBy,     setSortBy]     = useState('__total__');
   const [sortDir,    setSortDir]    = useState('desc');
   const [sortM,      setSortM]      = useState(null);   // metric used when sorting by a column (null = first selected metric)
+  const [dFrom,      setDFrom]      = useState('');     // Date filter (YYYY-MM-DD), applies at lead-creation-day level
+  const [dTo,        setDTo]        = useState('');
   const [topN,       setTopN]       = useState(20);
   const [collapsed,  setCollapsed]  = useState(new Set());
   const [addRowOpen, setAddRowOpen] = useState(false);
@@ -5216,7 +5229,8 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     { key:'lt',  label:'Lead Type' },
     { key:'city',label:'City'      },
     ...(maps.dl ? [{ key:'dl', label:'Dealer' }] : []),
-  ], [maps.dl]);
+    ...(data.dd && data.dd.length ? [{ key:'day', label:'Date' }] : []),
+  ], [maps.dl, data.dd]);
 
   const METRICS = [
     { key:'leads',  label:'Leads'     },
@@ -5252,9 +5266,16 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
   ];
   const PMR_DIMS = ['pmd', 'mdl', 'src', 'lm'];
 
+  // Date: the day-level table (data.dd) carries Date / Model / Source / Lead Type / State / Month only.
+  const ddHasSt = data.dd_v === 2;
+  const DD_DIMS = ddHasSt ? ['day', 'mdl', 'src', 'lt', 'st', 'lm'] : ['day', 'mdl', 'src', 'lt', 'lm'];
+  const dateOn = !!(dFrom || dTo);
   const matConfig = useMemo(() => {
     const needed = [...rowDims, ...colDims];
     if (new Set(needed).size < needed.length) return null; // any dim repeated
+    if (needed.includes('day') || dateOn) {
+      return needed.every(d => DD_DIMS.includes(d)) && data.dd && data.dd.length ? { key:'dd', dims: DD_DIMS } : null;
+    }
     if (needed.includes('pmd')) {                          // Purch. Model: only the pmx (or older pmr) matrix carries it
       const full = !!(data.pmx && data.pmx.length);
       const ds = full ? PMX_DIMS : PMR_DIMS;
@@ -5283,7 +5304,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
       }
     }
     return best;
-  }, [rowDims, colDims, filters, data.pmx]);
+  }, [rowDims, colDims, filters, data.pmx, dateOn, data.dd]);
 
   const isPmr = matConfig?.key === 'pmr' || matConfig?.key === 'pmx';
   const stViaCity = !!matConfig && matConfig.dims.includes('city') && !matConfig.dims.includes('st') && !isPmr
@@ -5293,7 +5314,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
   const pmFilterOn = !!(filters.purchasedModels && filters.purchasedModels.size > 0);
   const hasDl = [...rowDims, ...colDims].includes('dl');
   // Purch. Model filter + the exact table: leads come from the normal matrix, retails from pmx (any State / Lead Type / City / Month / Source / Model).
-  const pmxMode = pmFilterOn && !isPmr && !!(data.pmx && data.pmx.length) && !!matConfig && (!hasDl || PMX_V2);
+  const pmxMode = pmFilterOn && !isPmr && !!(data.pmx && data.pmx.length) && !!matConfig && matConfig.key !== 'dd' && (!hasDl || PMX_V2);
   const usePmx = matConfig?.key === 'pmx' || pmxMode;
   // pmx row v1: [pmi, mi, si, sti, tti, cti, create-month, retail-month, R, Rd, Rc]; v2 adds dli after cti.
   // Both become [...dims, month, 0 leads, R, Rd, Rc] in PMX_DIMS order.
@@ -5307,8 +5328,28 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     return m.length ? m : ['ret'];
   }, [metricsSel, isPmr]);
 
+  // Day-level rows -> [day, mdl, src, lt, (st), month, leads, R, Rd, Rc]. On Update: leads on the creation day, retails on the day they were attributed.
+  const ddMatrix = useMemo(() => {
+    if (matConfig?.key !== 'dd') return null;
+    const o = ddHasSt ? 1 : 0;
+    const lmIdx = new Map((maps.lm || []).map((l, i) => [l, i]));
+    const lmOf = day => { const y = Math.floor(day / 10000) % 100, m = Math.floor(day / 100) % 100;
+      const i = lmIdx.get(MONTHS[m - 1] + "'" + String(y).padStart(2, '0')); return i == null ? -1 : i; };
+    const out = [];
+    for (const r of data.dd) {
+      const k = r.slice(0, 4 + o);
+      out.push([...k, lmOf(r[0]), r[4 + o] || 0, upd ? 0 : (r[5 + o] || 0), upd ? 0 : (r[6 + o] || 0), upd ? 0 : (r[7 + o] || 0)]);
+    }
+    if (upd) for (const r of (data.ddu || [])) {
+      const k = r.slice(0, 4 + o);
+      out.push([...k, lmOf(r[0]), 0, r[4 + o] || 0, r[5 + o] || 0, r[6 + o] || 0]);
+    }
+    return out;
+  }, [matConfig, data.dd, data.ddu, upd, ddHasSt, maps]);
+
   const rawMatrix = useMemo(() => {
     if (!matConfig) return [];
+    if (matConfig.key === 'dd') return ddMatrix || [];
     if (matConfig.key === 'pmx') {
       if (!pmxBase) return [];
       if (!pmFilterOn) return pmxBase;
@@ -5326,7 +5367,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
       return out;
     }
     return data[matConfig.key] || [];
-  }, [data, matConfig, filters.purchasedModels, maps, pmxBase, pmFilterOn]);
+  }, [data, matConfig, filters.purchasedModels, maps, pmxBase, pmFilterOn, ddMatrix]);
 
   // skipModels: Purch. Model retails replace the Model filter (the filter then applies to leads only).
   const buildSets = (dims, skipModels) => {
@@ -5436,7 +5477,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
   // Purch. Model filter: pmr only carries (enquired model, source, month), so retails can be
   // restricted to the chosen purchased models exactly only when the pivot uses just those dims.
   const pmInfo = useMemo(() => {
-    if (!pmMaps || !matConfig || isPmr || pmxMode) return null;
+    if (!pmMaps || !matConfig || isPmr || pmxMode || matConfig.key === 'dd') return null;
     const dims = matConfig.dims;
     const pivotDims = [...rowDims, ...colDims];
     const capable = pivotDims.every(d => d === 'mdl' || d === 'src' || d === 'lm');
@@ -5465,7 +5506,12 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     const rPos1 = rowDims[1] ? posOf(rowDims[1]) : -1;
     const cPos0 = posOf(colDims[0]);
     const cPos1 = colDims[1] ? posOf(colDims[1]) : -1;
-    const lbl   = (dim, idx) => ((dim === 'pmd' ? maps.mdl : maps[dim]) || [])[idx] ?? '#' + idx;
+    const dayLbl = n => { const d = n % 100, ym = Math.floor(n / 100), y = Math.floor(ym / 100), m = ym % 100;
+      return d === 0 ? 'No day \u00B7 ' + MONTHS[m - 1] + "'" + String(y % 100).padStart(2, '0')
+                     : y + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0'); };
+    const lbl   = (dim, idx) => dim === 'day' ? dayLbl(idx) : ((dim === 'pmd' ? maps.mdl : maps[dim]) || [])[idx] ?? '#' + idx;
+    const dayP  = dims.indexOf('day');
+    const fromN = dFrom ? +dFrom.replace(/-/g, '') : 0, toN = dTo ? +dTo.replace(/-/g, '') : 99999999;
     const at    = (row, pos) => pos === -2 ? (maps.city_state || [])[row[stP]]
                               : pos === -3 ? homeMaps.st.get(row[dlP])
                               : pos === -4 ? homeMaps.city.get(row[dlP]) : row[pos];
@@ -5483,6 +5529,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
       }
       if (!ok) continue;
       if (dlHomeOk && !dlHomeOk.has(row[dims.indexOf('dl')])) continue;
+      if (dateOn && dayP >= 0 && (row[dayP] % 100 === 0 || row[dayP] < fromN || row[dayP] > toN)) continue;
 
       const r1 = lbl(rowDims[0], at(row, rPos0));
       const r2 = rowDims[1] ? lbl(rowDims[1], at(row, rPos1)) : null;
@@ -5539,7 +5586,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
       }
     }
     return { tbl, colLabels: [...colSet] };
-  }, [rawMatrix, matConfig, rowDims, colDims, filterSets, maps, pmInfo, pmxMode, pmxBase, filters, dlHomeOk, dlHomePm, stViaCity, homeMaps, stFromDl, cityFromDl]);
+  }, [rawMatrix, matConfig, rowDims, colDims, filterSets, maps, pmInfo, pmxMode, pmxBase, filters, dlHomeOk, dlHomePm, stViaCity, homeMaps, stFromDl, cityFromDl, dFrom, dTo, dateOn]);
 
   const pm = metrics[0] || 'leads'; // primary metric drives column ordering + sorting
 
@@ -5676,12 +5723,13 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
       if (filters.leadTypes?.size > 0 && !ds.has('lt'))   out.push('Lead Type');
       if (filters.cities?.size    > 0 && !ds.has('city') && !hasD) out.push('City');
     }
+    if (matConfig.key === 'dd' && pmFilterOn) out.push('Purch. Model');
     if (matConfig.key === 'pmr') {
       if (filters.leadTypes?.size > 0) out.push('Lead Type');
       if (filters.cities?.size    > 0) out.push('City');
     }
     return out;
-  }, [matConfig, filters, rowDims, colDims]);
+  }, [matConfig, filters, rowDims, colDims, pmFilterOn]);
 
   function toggleCollapse(label) {
     setCollapsed(prev => {
@@ -5701,7 +5749,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     const name = tplName.trim();
     if (!name) { setTplNote('Type a name first.'); return; }
     const arr = s => [...(s || [])];
-    const t = { name, rows: rowDims, cols: colDims, metrics: metricsSel, sortBy, sortDir, topN, rt: RT, saved: Date.now(),
+    const t = { name, rows: rowDims, cols: colDims, metrics: metricsSel, sortBy, sortDir, topN, rt: RT, saved: Date.now(), dFrom, dTo,
       filters: { months: arr(filters.months), leadTypes: arr(filters.leadTypes), sources: arr(filters.sources), models: arr(filters.models),
                  states: arr(filters.states), cities: arr(filters.cities), purchasedModels: arr(filters.purchasedModels) } };
     const next = [...tpls.filter(x => x.name.toLowerCase() !== name.toLowerCase()), t].sort((a, b) => a.name.localeCompare(b.name));
@@ -5719,6 +5767,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     setMetricsSel((t.metrics || []).length ? t.metrics : ['leads']);
     setSortBy(t.sortBy || '__total__'); setSortDir(t.sortDir || 'desc'); setSortM(null); setTopN(t.topN != null ? t.topN : 20);
     setCollapsed(new Set());
+    setDFrom(t.dFrom || ''); setDTo(t.dTo || '');
     const f = t.filters || {}, S = a => new Set(a || []);
     onFiltersChange({ months: S(f.months), leadTypes: S(f.leadTypes), sources: S(f.sources), models: S(f.models),
                       states: S(f.states), cities: S(f.cities), purchasedModels: S(f.purchasedModels) });
@@ -5965,6 +6014,17 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
         )
       ),
 
+      data.dd && data.dd.length > 0 && ce('div', null,
+        ce('div', { style:{fontSize:10,fontWeight:700,color:'#64748B',textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:6} }, 'Date (lead created)'),
+        ce('div', { style:{ display:'flex', gap:6, alignItems:'center' } },
+          ce('input', { type:'date', value:dFrom, max:dTo || undefined, onChange:e=>setDFrom(e.target.value), title:'From date', style:{ ...selSt, cursor:'text' } }),
+          ce('span', { style:{ color:'#94A3B8', fontSize:12 } }, 'to'),
+          ce('input', { type:'date', value:dTo, min:dFrom || undefined, onChange:e=>setDTo(e.target.value), title:'To date', style:{ ...selSt, cursor:'text' } }),
+          dateOn && ce('button', { onClick:()=>{ setDFrom(''); setDTo(''); }, title:'Clear date filter',
+            style:{ fontSize:14, background:'none', border:'none', color:'#64748B', cursor:'pointer' } }, '\u00D7')
+        )
+      ),
+
       ce('div', { style:{ marginLeft:'auto', alignSelf:'flex-end', paddingTop:20, display:'flex', gap:8, alignItems:'center' } },
         ce('div', { style:{ position:'relative' } },
           ce('button', { onClick: () => { setTplOpen(o => !o); setTplNote(''); },
@@ -6026,6 +6086,11 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     }, isPmrOld
       ? '\u24D8  Purch. Model view: shows Retails only (a lead has no purchased model until it retails). It can be combined with Model (enquired), Source and Month; State / Lead Type / City filters are not applied here.'
       : '\u24D8  Purch. Model view: shows Retails only (a lead has no purchased model until it retails). It can be combined with Month, Model (enquired), Source, State, Lead Type and City.'),
+
+    matConfig?.key === 'dd' && ce('div', {
+      style:{ padding:'7px 14px', background:'#EFF6FF', border:'1px solid #93C5FD',
+              borderRadius:8, fontSize:12, color:'#1E3A8A', marginBottom:12 }
+    }, '\u24D8  Date view: leads are counted on the day they were created; ' + (upd ? 'retails on the day they were attributed.' : 'retails are attributed to the lead\u2019s creation day.') + ' Date works with Month, Model, Source, Lead Type' + (ddHasSt ? ', State' : '') + '; City, Dealer and Purch. Model are not available with Date. "No day" rows hold leads without a recorded day and are left out when a date range is set.'),
 
     dlHomeOk && ce('div', {
       style:{ padding:'7px 14px', background:'#EFF6FF', border:'1px solid #93C5FD',
