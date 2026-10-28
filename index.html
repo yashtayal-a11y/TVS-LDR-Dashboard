@@ -278,6 +278,18 @@ async function apiDeleteTemplate(email, name) {
     method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ email, name }), signal: sig }), 'deleteTemplate'));
   return j.templates || [];
 }
+// Admin: start the data pipeline now (the access service holds the GitHub token) / read the latest run.
+async function apiRebuild(email) {
+  const j = await _safeJson(await fetch(APPS_SCRIPT_URL + '?action=rebuildData', {
+    method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ email }) }), 'rebuildData');
+  if (j.error) throw new Error(j.error);
+  return j;
+}
+async function apiRebuildStatus(email) {
+  const j = await _safeJson(await fetch(APPS_SCRIPT_URL + '?action=rebuildStatus&email=' + encodeURIComponent(email)), 'rebuildStatus');
+  if (j.error) throw new Error(j.error);
+  return j;
+}
 async function apiUpdateRole(adminEmail, targetEmail, newRole) {
   const r = await fetch(APPS_SCRIPT_URL + '?action=updateRole', {
     method: 'POST',
@@ -4311,6 +4323,7 @@ function App() {
   const doFetch = useCallback(async () => {
     setLoading(true); setErr(null);
     try {
+      _dailyPromise = null;   // Refresh also reloads the day-level detail file
       const parsed = await fetchData();
       setData(parsed);
       try { localStorage.setItem(CACHE_KEY+'_t', parsed.t); } catch(e) {}
@@ -4319,6 +4332,33 @@ function App() {
   }, []);
 
   useEffect(() => { if (auth && (auth.role === 'full' || auth.role === 'viewer' || auth.role === 'admin')) doFetch(); }, [auth && auth.role]);
+
+  // Admin "Rebuild": start the pipeline (sources -> payload), watch it, then reload the data when it has finished.
+  const [rebuildMsg, setRebuildMsg] = useState('');
+  const [rebuilding, setRebuilding] = useState(false);
+  async function doRebuild() {
+    if (!window.confirm('Re-run the data pipeline now?\n\nIt reads all source files again and rebuilds every value. This takes about 25 minutes; the dashboard reloads the new data by itself when it is done.')) return;
+    setRebuilding(true); setRebuildMsg('Starting…');
+    try {
+      await apiRebuild(auth.email);
+      setRebuildMsg('Rebuild started — about 25 min');
+      const t0 = Date.now();
+      for (;;) {
+        await new Promise(r => setTimeout(r, 60000));
+        let st = null;
+        try { st = await apiRebuildStatus(auth.email); } catch (e) {}
+        const mins = Math.round((Date.now() - t0) / 60000);
+        if (st && st.status === 'completed') {
+          if (st.conclusion === 'success') { setRebuildMsg('Rebuild finished — reloading data'); await doFetch(); setRebuildMsg('Data rebuilt and reloaded'); }
+          else setRebuildMsg('⚠ Rebuild ' + (st.conclusion || 'failed') + ' — see GitHub Actions');
+          break;
+        }
+        if (mins > 90) { setRebuildMsg('Still running — press Refresh later'); break; }
+        setRebuildMsg('Rebuilding… ' + mins + ' min');
+      }
+    } catch (e) { setRebuildMsg('⚠ ' + (e && e.message ? e.message : 'failed')); }
+    finally { setRebuilding(false); }
+  }
 
   // ── Derived data ───────────────────────────────────────────────────
   const effectiveData = useMemo(() => {
@@ -4548,7 +4588,10 @@ function App() {
               }, 'A+'),
             ),
             loading && ce('div', { className:'spinner' }),
-            ce('button', { className:'btn btn-secondary', style:{fontSize:11}, onClick:doFetch }, '⟳ Refresh'),
+            ce('button', { className:'btn btn-secondary', style:{fontSize:11}, onClick:doFetch, title:'Reload the latest published data' }, '⟳ Refresh'),
+            role === 'admin' && ce('button', { className:'btn btn-secondary', style:{fontSize:11}, onClick:doRebuild, disabled:rebuilding,
+              title:'Re-run the data pipeline from all source files (about 25 min)' }, rebuilding ? 'Rebuilding…' : '⚡ Rebuild'),
+            rebuildMsg && ce('div', { className:'fs-10', style:{ color: rebuildMsg.startsWith('⚠') ? '#B91C1C' : '#64748B', maxWidth:170 } }, rebuildMsg),
             role === 'admin' && ce('button', { className:'btn btn-secondary', style:{fontSize:11}, onClick:() => setAdminView(true) }, '⚙ Admin Panel'),
             userChip,
             ce('button', { className:'btn-ghost', style:{fontSize:11,color:'#64748B'}, onClick:handleLogout }, 'Sign Out'),
@@ -5984,24 +6027,6 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
       ),
 
       ce('div', { style:{width:1,height:40,background:'#E2E8F0',alignSelf:'center',marginTop:20} }),
-
-      /* SORT — hide per-column sort when 2 col dims (composite keys aren't readable labels) */
-      ce('div', null,
-        ce('div', { style:{fontSize:10,fontWeight:700,color:'#64748B',textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:6} }, 'Sort By'),
-        ce('select', { value:sortBy, onChange:e=>setSortBy(e.target.value), style:selSt },
-          ce('option',{value:'__total__'},'Total'),
-          ce('option',{value:'__label__'},'Row Label'),
-          ...(!hasC2 ? orderedCols.slice(0,8).map(c => ce('option',{key:c,value:c}, c.length>15?c.slice(0,14)+'…':c)) : [])
-        )
-      ),
-
-      ce('div', null,
-        ce('div', { style:{fontSize:10,fontWeight:700,color:'#64748B',textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:6} }, 'Order'),
-        ce('select', { value:sortDir, onChange:e=>setSortDir(e.target.value), style:selSt },
-          ce('option',{value:'desc'},'↓  High → Low'),
-          ce('option',{value:'asc' },'↑  Low → High'),
-        )
-      ),
 
       ce('div', null,
         ce('div', { style:{fontSize:10,fontWeight:700,color:'#64748B',textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:6} }, 'Show'),
