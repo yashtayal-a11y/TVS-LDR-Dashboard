@@ -467,6 +467,7 @@ function normalizeCities(data) {
     ['u_cm',  0, 2], ['u_csm', 0, 3], ['u_cxm',0, 3],
     ['u_stcm',1, 3], ['u_cdm', 0, 3], ['u_cdsm',0,4],
     ['dl_sn', 0, 3],
+    ['cslt', 0, 4], ['u_cslt', 0, 4],
   ];
   for (const [mk, cc, nk] of CITY_MATS) remapMatrix(mk, cc, nk);
 
@@ -4621,7 +4622,7 @@ function App() {
       mxst: data.u_mxst, mlt: data.u_mlt, stlt: data.u_stlt, disp: data.u_disp, pmr: data.u_pmr || [],
       stcm: data.u_stcm, univ: data.u_univ,
       stdm: data.u_stdm, mxdl: data.u_mxdl, ltdl: data.u_ltdl,
-      cm: data.u_cm || [], csm: data.u_csm || [], cxm: data.u_cxm || [], cxsm: data.u_cxsm || [],
+      cm: data.u_cm || [], csm: data.u_csm || [], cxm: data.u_cxm || [], cxsm: data.u_cxsm || [], cslt: data.u_cslt || [],
       cdm: data.u_cdm || [], cdsm: data.u_cdsm || [],
     };
   }, [data, leadsMode]);
@@ -5556,6 +5557,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     { key:'csm',  dims:['city','src','lm']       },
     { key:'cxm',  dims:['city','mdl','lm']          },
     { key:'cxsm', dims:['city','src','mdl','lm']   },
+    { key:'cslt', dims:['city','src','lt','lm']    },
     { key:'cdm',  dims:['city','dl','lm']        },
     { key:'cdsm', dims:['city','dl','src','lm']  },
     { key:'stcm', dims:['st','city','lm']        },

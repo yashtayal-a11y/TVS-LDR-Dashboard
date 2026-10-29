@@ -2276,6 +2276,7 @@ def build_payload(all_leads, retail_map):
     snf = {}
     cxm, u_cxm = {}, {}           # city × model × month
     cxsm, u_cxsm = {}, {}         # city × src × model × month (source-filterable)
+    cslt, u_cslt = {}, {}         # city × src × lead-type × month (Pivot: City + Lead Type + Source)
     u_cm, u_csm = {}, {}          # city × month (retail-month attribution)
     u_cdm, u_cdsm = {}, {}        # city × dealer × month (retail-month attribution)
     ram = {}                       # Retail Ageing: model × src × age_bucket × lead_month → [rets, dms, co]
@@ -2393,6 +2394,7 @@ def build_payload(all_leads, retail_map):
         bump(csm,     f"{cti}|{si}|{li}",   is_ret, rtype)
         bump(cxm,     f"{cti}|{mi}|{li}",      is_ret, rtype)
         bump(cxsm,    f"{cti}|{si}|{mi}|{li}", is_ret, rtype)
+        bump(cslt,    f"{cti}|{si}|{tti}|{li}", is_ret, rtype)
         bump(stcm,    f"{sti}|{cti}|{li}",  is_ret, rtype)
         bump(univ,    f"{mi}|{si}|{sti}|{tti}|{li}", is_ret, rtype)
         _dday = lead_day(lid, lm, _cds[i])
@@ -2460,6 +2462,7 @@ def build_payload(all_leads, retail_map):
         ubump(u_csm, f"{cti}|{si}|{li}",   f"{cti}|{si}|{uli}",   is_ret, rtype)
         ubump(u_cxm,  f"{cti}|{mi}|{li}",      f"{cti}|{mi}|{uli}",      is_ret, rtype)
         ubump(u_cxsm, f"{cti}|{si}|{mi}|{li}", f"{cti}|{si}|{mi}|{uli}", is_ret, rtype)
+        ubump(u_cslt, f"{cti}|{si}|{tti}|{li}", f"{cti}|{si}|{tti}|{uli}", is_ret, rtype)
 
         if dl_col:
             ubump(u_stdm, f"{sti}|{dli}|{li}", f"{sti}|{dli}|{uli}", is_ret, rtype)
@@ -2646,10 +2649,12 @@ def build_payload(all_leads, retail_map):
         'csm':     to_rows(csm, lambda k: list(map(int, k.split('|')))),
         'cxm':     to_rows(cxm,  lambda k: list(map(int, k.split('|')))),
         'cxsm':    to_rows(cxsm, lambda k: list(map(int, k.split('|')))),
+        'cslt':    to_rows(cslt, lambda k: list(map(int, k.split('|')))),
         'u_cm':    to_rows(u_cm,   lambda k: list(map(int, k.split('|')))),
         'u_csm':   to_rows(u_csm,  lambda k: list(map(int, k.split('|')))),
         'u_cxm':   to_rows(u_cxm,  lambda k: list(map(int, k.split('|')))),
         'u_cxsm':  to_rows(u_cxsm, lambda k: list(map(int, k.split('|')))),
+        'u_cslt':  to_rows(u_cslt, lambda k: list(map(int, k.split('|')))),
         **({"cdm":  to_rows(cdm,  lambda k: list(map(int, k.split('|')))),
             "cdsm": to_rows(cdsm, lambda k: list(map(int, k.split('|')))),
             "dl_sn": [[*map(int,k.split('|')), *v] for k,v in dl_sn.items()],
