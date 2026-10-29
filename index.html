@@ -5189,6 +5189,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
   const [sortBy,     setSortBy]     = useState('__total__');
   const [sortDir,    setSortDir]    = useState('desc');
   const [sortM,      setSortM]      = useState(null);   // metric used when sorting by a column (null = first selected metric)
+  const [pctCols,    setPctCols]    = useState(() => new Set());   // columns shown as % of subtotal (key: column + metric)
   const [dFrom,      setDFrom]      = useState('');     // Date filter (YYYY-MM-DD), applies at lead-creation-day level
   const [dTo,        setDTo]        = useState('');
   const [topN,       setTopN]       = useState(20);
@@ -5932,6 +5933,16 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     }, m.label);
   };
 
+  // % of subtotal: child rows -> share of their group's subtotal; subtotal / single-level rows -> share of the grand total.
+  const pk = (ck, m) => ck + '\u0001' + m;
+  const isPct = (ck, m) => m !== 'retpct' && pctCols.has(pk(ck, m));
+  const togglePct = (ck, m) => setPctCols(prev => { const n = new Set(prev); const k = pk(ck, m); if (n.has(k)) n.delete(k); else n.add(k); return n; });
+  const pctStr = (v, d) => (d > 0 && v > 0) ? (v / d * 100).toFixed(1) + '%' : '—';
+  const grandNum = m => m === 'leads' ? grandTotals.gl : m === 'ret' ? grandTotals.gr
+    : Object.values(grandTotals.colVals).reduce((s, v) => s + getMetricVal(v, m), 0);
+  const cellV = (vals, m, ck, den) => isPct(ck, m) ? pctStr(getMetricVal(vals, m), getMetricVal(den, m)) : fmtV(vals, m);
+  const cellTot = (cMap, m, denMap) => isPct('__total__', m) ? pctStr(rowTotal(cMap, m), denMap ? rowTotal(denMap, m) : grandNum(m)) : fmtTotal(cMap, m);
+
   // ── Render ────────────────────────────────────────────────────────
   return ce('div', { style:{ padding:'0 4px' } },
 
@@ -6163,6 +6174,15 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
                       color: sortBy === by && sortDir === dir && (!m || sm === m) ? '#FDE047' : 'rgba(255,255,255,0.45)' }
             }, dir === 'asc' ? '\u25B2' : '\u25BC')));
 
+          // "%" switch on number columns: show the column as % of subtotal
+          const pctBtn = (ck, m) => m === 'retpct' ? null : ce('span', {
+            title: isPct(ck, m) ? 'Show numbers' : 'Show as % of subtotal',
+            onClick: e => { e.stopPropagation(); togglePct(ck, m); },
+            style:{ cursor:'pointer', marginLeft:4, padding:'0 4px', fontSize:10, fontWeight:700, borderRadius:4,
+                    border:'1px solid rgba(255,255,255,0.4)',
+                    color: isPct(ck, m) ? '#1a3a5c' : 'rgba(255,255,255,0.8)',
+                    background: isPct(ck, m) ? '#FDE047' : 'transparent' } }, '%');
+
           const rowLabelTh = (dim, i, bg, txt, small) =>
             ce('th', { key:`rl_${dim}`,
               style:{ padding: small?'6px 16px':'10px 16px', textAlign:'left', fontWeight:700,
@@ -6255,7 +6275,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
                             fontSize:11, color:botTxt, background:botBg,
                             borderLeft: mi===0&&groupBorder ? '1px solid rgba(255,255,255,0.15)'
                                        : mi===0&&ci>0&&!hasC2 ? '1px solid rgba(255,255,255,0.1)' : 'none' }
-                  }, METRICS.find(x=>x.key===m)?.label||m, sortBtns(ck, m))
+                  }, METRICS.find(x=>x.key===m)?.label||m, sortBtns(ck, m), pctBtn(ck, m))
                 );
               }
               // single metric
@@ -6269,7 +6289,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
                         borderLeft: groupBorder ? '1px solid rgba(255,255,255,0.15)'
                                    : ci>0&&!hasC2 ? '1px solid rgba(255,255,255,0.1)' : 'none',
                         userSelect:'none' }
-              }, colLabel, sortBtns(ck, metrics[0]))];
+              }, colLabel, sortBtns(ck, metrics[0]), pctBtn(ck, metrics[0]))];
             }),
 
             // TOTAL header(s)
@@ -6280,7 +6300,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
                         fontSize: multiMetric?11:13, color:botTxt, background:botBg,
                         borderLeft: mi===0 ? '2px solid rgba(255,255,255,0.3)' : 'none',
                         userSelect:'none' }
-              }, multiMetric ? (METRICS.find(x=>x.key===m)?.label||m) : 'TOTAL', sortBtns('__total__', m));
+              }, multiMetric ? (METRICS.find(x=>x.key===m)?.label||m) : 'TOTAL', sortBtns('__total__', m), pctBtn('__total__', m));
             })
           ));
 
@@ -6339,7 +6359,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
                             fontWeight: hasR2 ? 700 : 400,
                             borderLeft: mi===0&&(groupBorder||(multiMetric&&ci>0))
                               ? `1px solid ${grpSep}` : 'none' }
-                  }, fmtV(entry.sub.get(ck), m))
+                  }, cellV(entry.sub.get(ck), m, ck, grandTotals.colVals[ck]))
                 );
               }),
               // Row totals
@@ -6348,7 +6368,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
                   style:{ padding:'8px 12px', textAlign:'right', fontWeight:700,
                           background: grpBg, color: grpTxt,
                           borderLeft: mi===0 ? `2px solid ${grpSep}` : 'none' }
-                }, fmtTotal(entry.sub, m))
+                }, cellTot(entry.sub, m, null))
               )
             ));
 
@@ -6379,7 +6399,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
                         style:{ padding:'7px 12px', textAlign:'right', color:cTxt,
                                 fontSize:12,
                                 borderLeft: mi===0&&(groupBorder||(multiMetric&&colI>0)) ? `1px solid ${pal.sep}` : 'none' }
-                      }, fmtV(cMap.get(ck), m))
+                      }, cellV(cMap.get(ck), m, ck, entry.sub.get(ck)))
                     );
                   }),
                   // Row totals
@@ -6387,7 +6407,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
                     ce('td', { key:`tot_${m}`,
                       style:{ padding:'7px 12px', textAlign:'right', fontWeight:700, color:cTxt,
                               fontSize:12, borderLeft: mi===0 ? `2px solid ${pal.sep}` : 'none' }
-                    }, fmtTotal(cMap, m))
+                    }, cellTot(cMap, m, entry.sub))
                   )
                 ));
               }
@@ -6412,7 +6432,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
                 ce('td', { key:`gt_${ck}_${m}`,
                   style:{ padding:'10px 12px', textAlign:'right', color:'#fff', background:'#1E3A8A',
                           borderLeft: mi===0&&(groupBorder||(multiMetric&&ci>0)) ? '1px solid rgba(255,255,255,0.2)' : 'none' }
-                }, fmtV(cv, m))
+                }, isPct(ck, m) ? (getMetricVal(cv, m) > 0 ? '100.0%' : '—') : fmtV(cv, m))
               );
             }),
             ...metrics.map((m, mi) => {
@@ -6423,7 +6443,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
                 const t = m === 'leads' ? grandTotals.gl
                         : m === 'ret'   ? grandTotals.gr
                         : Object.values(grandTotals.colVals).reduce((s, v) => s + getMetricVal(v, m), 0);
-                display = t > 0 ? t.toLocaleString() : '—';
+                display = t > 0 ? (isPct('__total__', m) ? '100.0%' : t.toLocaleString()) : '—';
               }
               return ce('td', { key:`gt_tot_${m}`,
                 style:{ padding:'10px 12px', textAlign:'right', background:'#1E3A8A',
