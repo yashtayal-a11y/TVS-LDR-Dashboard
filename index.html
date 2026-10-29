@@ -4336,27 +4336,43 @@ function App() {
   // Admin "Rebuild": start the pipeline (sources -> payload), watch it, then reload the data when it has finished.
   const [rebuildMsg, setRebuildMsg] = useState('');
   const [rebuilding, setRebuilding] = useState(false);
-  async function doRebuild() {
-    if (!window.confirm('Re-run the data pipeline now?\n\nIt reads all source files again and rebuilds every value. This takes about 25 minutes; the dashboard reloads the new data by itself when it is done.')) return;
-    setRebuilding(true); setRebuildMsg('Starting…');
-    try {
-      await apiRebuild(auth.email);
-      setRebuildMsg('Rebuild started — about 25 min');
-      const t0 = Date.now();
-      for (;;) {
-        await new Promise(r => setTimeout(r, 60000));
-        let st = null;
-        try { st = await apiRebuildStatus(auth.email); } catch (e) {}
-        const mins = Math.round((Date.now() - t0) / 60000);
-        if (st && st.status === 'completed') {
-          if (st.conclusion === 'success') { setRebuildMsg('Rebuild finished — reloading data'); await doFetch(); setRebuildMsg('Data rebuilt and reloaded'); }
-          else setRebuildMsg('⚠ Rebuild ' + (st.conclusion || 'failed') + ' — see GitHub Actions');
-          break;
-        }
-        if (mins > 90) { setRebuildMsg('Still running — press Refresh later'); break; }
-        setRebuildMsg('Rebuilding… ' + mins + ' min');
+  // Poll the pipeline run until it finishes, then reload the data.
+  async function watchRebuild(t0) {
+    for (;;) {
+      await new Promise(r => setTimeout(r, 60000));
+      let st = null;
+      try { st = await apiRebuildStatus(auth.email); } catch (e) {}
+      const mins = Math.round((Date.now() - t0) / 60000);
+      if (st && st.status === 'completed') {
+        if (st.conclusion === 'success') { setRebuildMsg('Rebuild finished — reloading data'); await doFetch(); setRebuildMsg('Data rebuilt and reloaded'); }
+        else setRebuildMsg('⚠ Rebuild ' + (st.conclusion || 'failed') + ' — see GitHub Actions');
+        return;
       }
-    } catch (e) { setRebuildMsg('⚠ ' + (e && e.message ? e.message : 'failed')); }
+      if (mins > 90) { setRebuildMsg('Still running — press Refresh later'); return; }
+      setRebuildMsg('Rebuild in progress… ' + mins + ' min');
+    }
+  }
+  async function doRebuild() {
+    setRebuilding(true);
+    try {
+      // A run that is already going (scheduled or started earlier): just follow it.
+      let cur = null;
+      try { cur = await apiRebuildStatus(auth.email); } catch (e) {}
+      if (cur && (cur.status === 'in_progress' || cur.status === 'queued')) {
+        setRebuildMsg('Rebuild in progress…'); await watchRebuild(Date.now()); return;
+      }
+      if (!window.confirm('Re-run the data pipeline now?\n\nIt reads all source files again and rebuilds every value. This takes about 25 minutes; the dashboard reloads the new data by itself when it is done.')) { return; }
+      setRebuildMsg('Starting…');
+      try { await apiRebuild(auth.email); }
+      catch (e) {
+        const m = String(e && e.message || '');
+        if (/already requested/i.test(m)) { setRebuildMsg('Rebuild in progress…'); await watchRebuild(Date.now()); return; }
+        if (/unknown action|not set up/i.test(m)) { setRebuildMsg('Rebuild is not available yet'); return; }
+        throw e;
+      }
+      setRebuildMsg('Rebuild in progress — about 25 min');
+      await watchRebuild(Date.now());
+    } catch (e) { setRebuildMsg('Rebuild could not be started — try again later'); }
     finally { setRebuilding(false); }
   }
 
