@@ -2260,6 +2260,8 @@ def build_payload(all_leads, retail_map):
     ddu = {}                # Day-on-Day, retail side (On Update): retail ATTRIBUTION day x model x source x lead-type -> [R, R_dms, R_co]
     _ddu_undated = 0
     _ddu_outside = 0
+    ddp  = {}               # Day-on-Day x Purchased Model, On Create: lead-creation day x model x source x lead-type x state x purch. model -> [R, R_dms, R_co]
+    ddup = {}               # same, On Update: retail attribution day
     # Admin "Day on Day" detail file (data/tvs_daily.json.gz): the last 4 lead months at full granularity
     # (day x model x source x lead-type x state x city; retails also x purchased model), loaded on demand.
     dly_L = {}    # (lead day, mi, si, lt, st, city) -> leads
@@ -2470,6 +2472,13 @@ def build_payload(all_leads, retail_map):
             raw_pm = retail_map[lid].get('pm', '') or ''
             pm  = normalize_purchased_model(raw_pm) or 'Unknown'
             pmi = ix(mdl_idx, mdl_arr, pm)        # canonical purchased model (for pmr)
+            # ddp / ddup: retails by day and purchased model (the day tables above cannot carry it: a lead has no purchased model until it retails)
+            _rtp = rtype.upper()
+            for _pd, _pday in ((ddp, _dday), (ddup, _uday)):
+                _pe = _pd.setdefault(f"{_pday}|{mi}|{si}|{tti}|{sti}|{pmi}", [0, 0, 0])
+                _pe[0] += 1
+                if 'DMS' in _rtp:    _pe[1] += 1
+                elif 'CALL' in _rtp: _pe[2] += 1
             if (_dday // 100) in _dfm or (_uday // 100) in _dfm:
                 _rtd = rtype.upper()
                 _rk = (_dday, _uday, mi, si, tti, sti, cti, pmi, 0 if 'DMS' in _rtd else (1 if 'CALL' in _rtd else 2))
@@ -2563,6 +2572,13 @@ def build_payload(all_leads, retail_map):
             _e = _dd_new.setdefault(_kk, [0, 0, 0, 0])
             for _j in range(4): _e[_j] += _v[_j]
         dd = _dd_new
+        _ddp_new = {}
+        for _k, _v in ddp.items():
+            _p = _k.split('|'); _d = int(_p[0])
+            if _d // 100 in _dd_collapse and _d % 100: _p[0] = str((_d // 100) * 100)
+            _e = _ddp_new.setdefault('|'.join(_p), [0, 0, 0])
+            for _j in range(3): _e[_j] += _v[_j]
+        ddp = _ddp_new
         print(f"Day-on-Day: months without a usable daily date (collapsed to undated): {_dd_collapse}", flush=True)
 
     maps_payload = {
@@ -2610,6 +2626,10 @@ def build_payload(all_leads, retail_map):
         # [retail day YYYYMMDD (YYYYMM00 = no day), model_idx, src_idx, lt_idx, state_idx, R, R_dms, R_co]
         'ddu':     [[*map(int, k.split('|')), *v] for k, v in ddu.items()],
         'dd_v':    2,   # Day-on-Day rows carry a state_idx column after lt_idx
+        # Day-on-Day x Purchased Model (retails only): [day, model_idx, src_idx, lt_idx, state_idx, purch_model_idx, R, R_dms, R_co]
+        # ddp = lead-creation day (On Create), ddup = retail attribution day (On Update). Purchased model uses the same index space as 'mdl'.
+        'ddp':     [[*map(int, k.split('|')), *v] for k, v in ddp.items()],
+        'ddup':    [[*map(int, k.split('|')), *v] for k, v in ddup.items()],
         'stm':     to_rows(stm, lambda k: list(map(int, k.split('|')))),
         'mxst':    to_rows(mxst,  lambda k: list(map(int, k.split('|')))),
         'mlt':     to_rows(mlt,   lambda k: list(map(int, k.split('|')))),
@@ -2673,6 +2693,9 @@ def build_payload(all_leads, retail_map):
     _ddu_R = sum(v[0] for v in ddu.values()); _u_R = sum(v[1] for v in u_monthly.values())
     print(f"Day-on-Day (On Update retails): ddu_rows={len(ddu):,}  retails={_ddu_R:,} (u_monthly retails={_u_R:,}"
           f"{'' if _ddu_R == _u_R else '  ** MISMATCH **'})  no-day={_ddu_undated:,} (of which day outside retail month={_ddu_outside:,})", flush=True)
+    _ddp_R = sum(v[0] for v in ddp.values()); _ddup_R = sum(v[0] for v in ddup.values()); _dd_R = sum(v[1] for v in dd.values())
+    print(f"Day-on-Day x Purch. Model: ddp_rows={len(ddp):,} retails={_ddp_R:,}  ddup_rows={len(ddup):,} retails={_ddup_R:,}  "
+          f"(dd retails={_dd_R:,}{'' if _ddp_R == _ddup_R == _dd_R else '  ** MISMATCH **'})", flush=True)
     return payload
 
 # ─── Pipeline guard functions (defined here so every stage can call them) ─────

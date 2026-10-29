@@ -5280,7 +5280,9 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
 
   // Date: the day-level table (data.dd) carries Date / Model / Source / Lead Type / State / Month only.
   const ddHasSt = data.dd_v === 2;
-  const DD_DIMS = ddHasSt ? ['day', 'mdl', 'src', 'lt', 'st', 'lm'] : ['day', 'mdl', 'src', 'lt', 'lm'];
+  // ddp / ddup (retails only) add the purchased model: [day, mdl, src, lt, st, pmd, R, Rd, Rc]
+  const DD_PM = ddHasSt && !!(data.ddp && data.ddp.length);
+  const DD_DIMS = [...(ddHasSt ? ['day', 'mdl', 'src', 'lt', 'st'] : ['day', 'mdl', 'src', 'lt']), ...(DD_PM ? ['pmd'] : []), 'lm'];
   const dateOn = !!(dFrom || dTo);
   const matConfig = useMemo(() => {
     const needed = [...rowDims, ...colDims];
@@ -5316,7 +5318,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
       }
     }
     return best;
-  }, [rowDims, colDims, filters, data.pmx, dateOn, data.dd]);
+  }, [rowDims, colDims, filters, data.pmx, dateOn, data.dd, DD_PM]);
 
   const isPmr = matConfig?.key === 'pmr' || matConfig?.key === 'pmx';
   const stViaCity = !!matConfig && matConfig.dims.includes('city') && !matConfig.dims.includes('st') && !isPmr
@@ -5334,30 +5336,41 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     : PMX_V2 ? data.pmx.map(x => [x[0], x[1], x[2], x[3], x[4], x[5], x[6], upd ? x[8] : x[7], 0, x[9], x[10], x[11]])
              : data.pmx.map(x => [x[0], x[1], x[2], x[3], x[4], x[5], upd ? x[7] : x[6], 0, x[8], x[9], x[10]]), [usePmx, data.pmx, upd, PMX_V2]);
   const PMR_NO = ['leads', 'retpct'];   // a lead has no purchased model until it retails
+  const ddPmDim = matConfig?.key === 'dd' && DD_PM && [...rowDims, ...colDims].includes('pmd');
   const metrics = useMemo(() => {
-    if (!isPmr) return metricsSel;
+    if (!isPmr && !ddPmDim) return metricsSel;
     const m = metricsSel.filter(k => !PMR_NO.includes(k));
     return m.length ? m : ['ret'];
-  }, [metricsSel, isPmr]);
+  }, [metricsSel, isPmr, ddPmDim]);
 
   // Day-level rows -> [day, mdl, src, lt, (st), month, leads, R, Rd, Rc]. On Update: leads on the creation day, retails on the day they were attributed.
   const ddMatrix = useMemo(() => {
     if (matConfig?.key !== 'dd') return null;
-    const o = ddHasSt ? 1 : 0;
+    const o = ddHasSt ? 1 : 0, pz = DD_PM ? [0] : [];
+    const pmRet = DD_PM && (ddPmDim || pmFilterOn);      // retails come from ddp / ddup, which carry the purchased model
     const lmIdx = new Map((maps.lm || []).map((l, i) => [l, i]));
     const lmOf = day => { const y = Math.floor(day / 10000) % 100, m = Math.floor(day / 100) % 100;
       const i = lmIdx.get(MONTHS[m - 1] + "'" + String(y).padStart(2, '0')); return i == null ? -1 : i; };
     const out = [];
-    for (const r of data.dd) {
+    if (!ddPmDim) for (const r of data.dd) {
       const k = r.slice(0, 4 + o);
-      out.push([...k, lmOf(r[0]), r[4 + o] || 0, upd ? 0 : (r[5 + o] || 0), upd ? 0 : (r[6 + o] || 0), upd ? 0 : (r[7 + o] || 0)]);
+      const z = upd || pmRet;
+      out.push([...k, ...pz, lmOf(r[0]), r[4 + o] || 0, z ? 0 : (r[5 + o] || 0), z ? 0 : (r[6 + o] || 0), z ? 0 : (r[7 + o] || 0)]);
     }
-    if (upd) for (const r of (data.ddu || [])) {
+    if (upd && !pmRet) for (const r of (data.ddu || [])) {
       const k = r.slice(0, 4 + o);
-      out.push([...k, lmOf(r[0]), 0, r[4 + o] || 0, r[5 + o] || 0, r[6 + o] || 0]);
+      out.push([...k, ...pz, lmOf(r[0]), 0, r[4 + o] || 0, r[5 + o] || 0, r[6 + o] || 0]);
+    }
+    if (pmRet) {
+      // a trailing 1 marks Purch. Model retails: with a Purch. Model filter they ignore the Model filter (it applies to leads only)
+      const sel = pmFilterOn ? resolvePmIdx(filters.purchasedModels, maps) : null;
+      for (const r of ((upd ? data.ddup : data.ddp) || [])) {
+        if (sel && !sel.has(r[5])) continue;
+        out.push([r[0], r[1], r[2], r[3], r[4], r[5], lmOf(r[0]), 0, r[6] || 0, r[7] || 0, r[8] || 0, pmFilterOn ? 1 : 0]);
+      }
     }
     return out;
-  }, [matConfig, data.dd, data.ddu, upd, ddHasSt, maps]);
+  }, [matConfig, data.dd, data.ddu, data.ddp, data.ddup, upd, ddHasSt, maps, DD_PM, ddPmDim, pmFilterOn, filters.purchasedModels]);
 
   const rawMatrix = useMemo(() => {
     if (!matConfig) return [];
@@ -5534,19 +5547,22 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
 
     for (const row of rawMatrix) {
       let ok = true;
+      const pmRow = row[nDims + 4] === 1;      // day matrix: a Purch. Model retail row (see ddMatrix)
       for (const [dim, allowed] of Object.entries(filterSets)) {
         const pos = dims.indexOf(dim);
         if (pos < 0) continue;
+        if (pmRow && dim === 'mdl') continue;
         if (!allowed.has(row[pos])) { ok = false; break; }
       }
       if (!ok) continue;
       if (dlHomeOk && !dlHomeOk.has(row[dims.indexOf('dl')])) continue;
       if (dateOn && dayP >= 0 && (row[dayP] % 100 === 0 || row[dayP] < fromN || row[dayP] > toN)) continue;
 
-      const r1 = lbl(rowDims[0], at(row, rPos0));
-      const r2 = rowDims[1] ? lbl(rowDims[1], at(row, rPos1)) : null;
-      const c0 = lbl(colDims[0], at(row, cPos0));
-      const ck = colDims[1] ? c0 + COL_SEP + lbl(colDims[1], at(row, cPos1)) : c0;
+      const lb2 = (dim, pos) => (pmRow && dim === 'mdl' && filters.models?.size > 0 && !filters.models.has(maps.mdl[row[pos]])) ? MDL_OTHER : lbl(dim, at(row, pos));
+      const r1 = lb2(rowDims[0], rPos0);
+      const r2 = rowDims[1] ? lb2(rowDims[1], rPos1) : null;
+      const c0 = lb2(colDims[0], cPos0);
+      const ck = colDims[1] ? c0 + COL_SEP + lb2(colDims[1], cPos1) : c0;
       colSet.add(ck);
 
       let ov = pmxMode ? [0, 0, 0] : null;      // retails come from the second pass
@@ -5735,7 +5751,7 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
       if (filters.leadTypes?.size > 0 && !ds.has('lt'))   out.push('Lead Type');
       if (filters.cities?.size    > 0 && !ds.has('city') && !hasD) out.push('City');
     }
-    if (matConfig.key === 'dd' && pmFilterOn) out.push('Purch. Model');
+    if (matConfig.key === 'dd' && pmFilterOn && !DD_PM) out.push('Purch. Model');
     if (matConfig.key === 'pmr') {
       if (filters.leadTypes?.size > 0) out.push('Lead Type');
       if (filters.cities?.size    > 0) out.push('City');
@@ -6094,14 +6110,14 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     matConfig?.key === 'dd' && ce('div', {
       style:{ padding:'7px 14px', background:'#EFF6FF', border:'1px solid #93C5FD',
               borderRadius:8, fontSize:12, color:'#1E3A8A', marginBottom:12 }
-    }, '\u24D8  Date view: leads are counted on the day they were created; ' + (upd ? 'retails on the day they were attributed.' : 'retails are attributed to the lead\u2019s creation day.') + ' Date works with Month, Model, Source, Lead Type' + (ddHasSt ? ', State' : '') + '; City, Dealer and Purch. Model are not available with Date. "No day" rows hold leads without a recorded day and are left out when a date range is set.'),
+    }, '\u24D8  Date view: leads are counted on the day they were created; ' + (upd ? 'retails on the day they were attributed.' : 'retails are attributed to the lead\u2019s creation day.') + ' Date works with Month, Model, Source, Lead Type' + (ddHasSt ? ', State' : '') + (DD_PM ? ', Purch. Model (retails only)' : '') + '; City and Dealer' + (DD_PM ? '' : ' and Purch. Model') + ' are not available with Date. "No day" rows hold leads without a recorded day and are left out when a date range is set.'),
 
     dlHomeOk && ce('div', {
       style:{ padding:'7px 14px', background:'#EFF6FF', border:'1px solid #93C5FD',
               borderRadius:8, fontSize:12, color:'#1E3A8A', marginBottom:12 }
     }, 'ⓘ  Dealer view: the State / City filters are applied through each dealer’s main city (the city where it has the most leads).'),
 
-    pmxMode && filters.models?.size > 0 && ce('div', {
+    (pmxMode || (matConfig?.key === 'dd' && DD_PM && pmFilterOn)) && filters.models?.size > 0 && ce('div', {
       style:{ padding:'7px 14px', background:'#EFF6FF', border:'1px solid #93C5FD',
               borderRadius:8, fontSize:12, color:'#1E3A8A', marginBottom:12 }
     }, '\u24D8  Purch. Model is selected: the Model filter applies to leads only. Retails follow the purchased model; retails of other enquired models appear as "' + MDL_OTHER + '" when Model is a row or column.'),
