@@ -5617,6 +5617,8 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
   const upd = leadsMode === 'update';
   const pmFilterOn = !!(filters.purchasedModels && filters.purchasedModels.size > 0);
   const hasDl = [...rowDims, ...colDims].includes('dl');
+  // The chosen table carries Dealer (even if Dealer is not in the pivot): State / City then follow the dealer's main city.
+  const usesDl = !!matConfig && matConfig.dims.includes('dl');
   // Purch. Model filter + the exact table: leads come from the normal matrix, retails from pmx (any State / Lead Type / City / Month / Source / Model).
   const pmxMode = pmFilterOn && !isPmr && !!(data.pmx && data.pmx.length) && !!matConfig && matConfig.key !== 'dd' && (!hasDl || PMX_V2);
   const usePmx = matConfig?.key === 'pmx' || pmxMode;
@@ -5728,25 +5730,25 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     }
     return ok;
   };
-  const dlHomeOk = useMemo(() => !matConfig || !hasDl ? null : dlHomeFor(
+  const dlHomeOk = useMemo(() => !matConfig || !usesDl ? null : dlHomeFor(
       filters.states?.size > 0 && !matConfig.dims.includes('st') && !matConfig.dims.includes('city'),
       filters.cities?.size > 0 && !matConfig.dims.includes('city')),
-    [matConfig, hasDl, filters, data.cdm, maps]);
+    [matConfig, usesDl, filters, data.cdm, maps]);
   // Purch. Model retails by Dealer: State / City follow the dealer's main city, the same as the leads side.
   const dlHomePm = dlHomeOk;
   // Dealer -> main city / state (used when State or City is shown next to Dealer in a table that has neither)
   const homeMaps = useMemo(() => {
     const city = new Map(), st = new Map(), best = new Map();
-    if (!hasDl) return { city, st };
+    if (!usesDl) return { city, st };
     for (const r of (data.cdm || [])) {
       const l = r[r.length - 4];
       if (l > (best.get(r[1]) || 0)) { best.set(r[1], l); city.set(r[1], r[0]); }
     }
     for (const [dli, cti] of city) st.set(dli, (maps.city_state || [])[cti]);
     return { city, st };
-  }, [hasDl, data.cdm, maps]);
-  const stFromDl   = !!matConfig && hasDl && !matConfig.dims.includes('st') && !matConfig.dims.includes('city');
-  const cityFromDl = !!matConfig && hasDl && !matConfig.dims.includes('city');
+  }, [usesDl, data.cdm, maps]);
+  const stFromDl   = !!matConfig && usesDl && !matConfig.dims.includes('st') && !matConfig.dims.includes('city');
+  const cityFromDl = !!matConfig && usesDl && !matConfig.dims.includes('city');
 
   function getMetricVal(vals, m) {
     if (!vals) return 0;
@@ -5875,20 +5877,20 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     if (pmxMode && pmxBase) {
       const sel = resolvePmIdx(filters.purchasedModels, maps);
       const sets = buildSets(PMX_DIMS, true);
-      if (hasDl && dlHomePm) { delete sets.st; delete sets.city; }   // leads side uses the dealer's main city: do the same here
+      if (usesDl && dlHomePm) { delete sets.st; delete sets.city; }   // leads side uses the dealer's main city: do the same here
       const modelsOn = !!(filters.models && filters.models.size > 0);
       const pp = d => PMX_DIMS.indexOf(d);
       const rp0 = pp(rowDims[0]), rp1 = rowDims[1] ? pp(rowDims[1]) : -1, cp0 = pp(colDims[0]), cp1 = colDims[1] ? pp(colDims[1]) : -1;
       const dlq = pp('dl');
-      const pv = (dim, row, pos) => hasDl && stFromDl && dim === 'st' ? homeMaps.st.get(row[dlq])
-                                  : hasDl && cityFromDl && dim === 'city' ? homeMaps.city.get(row[dlq]) : row[pos];
+      const pv = (dim, row, pos) => usesDl && stFromDl && dim === 'st' ? homeMaps.st.get(row[dlq])
+                                  : usesDl && cityFromDl && dim === 'city' ? homeMaps.city.get(row[dlq]) : row[pos];
       const lb = (dim, row, pos) => (dim === 'mdl' && modelsOn && !filters.models.has(maps.mdl[row[pos]])) ? MDL_OTHER : lbl(dim, pv(dim, row, pos));
       for (const row of pmxBase) {
         if (!sel.has(row[0])) continue;
         let ok = true;
         for (const [dim, allowed] of Object.entries(sets)) if (!allowed.has(row[pp(dim)])) { ok = false; break; }
         if (!ok) continue;
-        if (hasDl && dlHomePm && !dlHomePm.has(row[pp('dl')])) continue;
+        if (usesDl && dlHomePm && !dlHomePm.has(row[pp('dl')])) continue;
         const r1 = lb(rowDims[0], row, rp0);
         const r2 = rp1 >= 0 ? lb(rowDims[1], row, rp1) : null;
         const c0 = lb(colDims[0], row, cp0);
