@@ -2381,7 +2381,7 @@ const FilterBar = React.memo(function FilterBar({ data, filters, onFiltersChange
     ce(MultiSelect, { label:'State',     options:states,    selected:filters.states,    onChange: v => set('states', v) }),
     cities.length > 0 && ce(MultiSelect, { label:'City', options:cities, selected:filters.cities, onChange: v => set('cities', v) }),
     purchasedModels.length > 0 && ce(MultiSelect, { label:'Purch. Model', options:purchasedModels, selected:filters.purchasedModels||new Set(), onChange: v => set('purchasedModels', v) }),
-    data.rt_cols && ce('div', { style:{display:'flex',alignItems:'center',background:'#F1F5F9',borderRadius:20,padding:'2px',border:'1px solid #E2E8F0',gap:2,flexShrink:0} },
+    data.rt_cols && tab !== 'pivot' && ce('div', { style:{display:'flex',alignItems:'center',background:'#F1F5F9',borderRadius:20,padding:'2px',border:'1px solid #E2E8F0',gap:2,flexShrink:0} },
       rtBtn('all', 'All'),
       rtBtn('dms', 'DMS'),
       rtBtn('co',  'Call Out'),
