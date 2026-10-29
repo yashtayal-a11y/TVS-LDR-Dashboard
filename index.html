@@ -4382,10 +4382,10 @@ const TatTab = React.memo(function TatTab({ data, filters, months, RT }) {
       r.st ? r.st.p90 : '', r.st ? +r.st.w7.toFixed(1) : '', ...r.ks.slice(0, summary.kmax + 1)]));
     const sheets = { 'Lead to retail TAT': a1 };
     if (mat && !mat.na) {
-      const hdr = ['Lead day', 'Leads', 'Retailed', 'Open', 'Conv %', ...Array.from({ length: mat.dim }, (_, i) => 'Retail day ' + (i + 1)), 'Later months', 'No retail date'];
+      const hdr = ['Lead day', 'Leads', 'Retailed', 'Open', 'Retailed within month', '% within month', 'Retailed later months', '% later months', ...Array.from({ length: mat.dim }, (_, i) => 'Retail day ' + (i + 1)), 'No retail date'];
       const a2 = [hdr];
-      mat.rows.forEach((r, d) => { if (!(r.L || r.ret)) return; a2.push([d === 0 ? 'No day recorded' : d, r.L, r.ret, r.open, r.L > 0 ? +(r.ret / r.L * 100).toFixed(2) : '', ...r.cells, r.later, r.nod]); });
-      a2.push(['Total', mat.tL, mat.tRet, Math.max(0, mat.tL - mat.tRet), mat.tL > 0 ? +(mat.tRet / mat.tL * 100).toFixed(2) : '', ...mat.colTot, mat.tLater, mat.tNod]);
+      mat.rows.forEach((r, d) => { if (!(r.L || r.ret)) return; a2.push([d === 0 ? 'No day recorded' : d, r.L, r.ret, r.open, r.ret - r.later - r.nod, r.L > 0 ? +((r.ret - r.later - r.nod) / r.L * 100).toFixed(2) : '', r.later, r.L > 0 ? +(r.later / r.L * 100).toFixed(2) : '', ...r.cells, r.nod]); });
+      a2.push(['Total', mat.tL, mat.tRet, Math.max(0, mat.tL - mat.tRet), mat.tRet - mat.tLater - mat.tNod, mat.tL > 0 ? +((mat.tRet - mat.tLater - mat.tNod) / mat.tL * 100).toFixed(2) : '', mat.tLater, mat.tL > 0 ? +(mat.tLater / mat.tL * 100).toFixed(2) : '', ...mat.colTot, mat.tNod]);
       sheets['Matrix ' + sel] = a2;
     }
     exportXlsx(sheets, 'TVS_Lead_TAT');
@@ -4458,25 +4458,28 @@ const TatTab = React.memo(function TatTab({ data, filters, months, RT }) {
         ce('thead', null, ce('tr', null,
           ce('th', { style: th({ textAlign: 'left', position: 'sticky', top: 0, left: 0, zIndex: 5, minWidth: 78 }) }, 'Lead day'),
           ce('th', { style: th({ position: 'sticky', top: 0, zIndex: 4 }) }, 'Leads'), ce('th', { style: th({ position: 'sticky', top: 0, zIndex: 4 }) }, 'Retailed'),
-          ce('th', { style: th({ position: 'sticky', top: 0, zIndex: 4 }) }, 'Open'), ce('th', { style: th({ position: 'sticky', top: 0, zIndex: 4 }) }, 'Conv %'),
-          ...Array.from({ length: mat.dim }, (_, c) => ce('th', { key: c, style: th({ position: 'sticky', top: 0, zIndex: 4, background: '#0F766E', minWidth: 34, padding: '7px 3px' }) }, String(c + 1))),
-          ce('th', { style: th({ position: 'sticky', top: 0, zIndex: 4, background: '#0F766E' }) }, 'Later months'),
+          ce('th', { style: th({ position: 'sticky', top: 0, zIndex: 4 }) }, 'Open'), ...['Within month', '% within', 'Later months', '% later'].map(t => ce('th', { key: t, style: th({ position: 'sticky', top: 0, zIndex: 4 }) }, t)),
+          ...Array.from({ length: mat.dim }, (_, c) => ce('th', { key: c, style: th({ position: 'sticky', top: 0, zIndex: 4, background: '#0F766E', minWidth: 34, padding: '7px 3px', borderLeft: c === 0 ? '3px solid #fff' : undefined }) }, String(c + 1))),
           ce('th', { style: th({ position: 'sticky', top: 0, zIndex: 4, background: '#475569' }) }, 'No retail date'))),
         ce('tbody', null,
           ...showRows.map(({ r, d }) => ce('tr', { key: d },
             ce('td', { style: td({ textAlign: 'left', fontWeight: 700, position: 'sticky', left: 0, background: '#F1F5F9', zIndex: 2 }) }, d === 0 ? 'No day' : d + ' ' + MONTHS[mat.ym % 100 - 1]),
             ce('td', { style: td({ fontWeight: 700 }) }, r.L ? Nf(r.L) : dash), ce('td', { style: td({ fontWeight: 700 }) }, r.ret ? Nf(r.ret) : dash),
             ce('td', { style: td({ color: '#64748B' }) }, r.open ? Nf(r.open) : dash),
-            ce('td', { style: td({ fontWeight: 700, color: '#B01229' }) }, r.L > 0 ? (r.ret / r.L * 100).toFixed(1) + '%' : dash),
-            ...r.cells.map((v, c) => ce('td', { key: c, style: td({ ...cw, background: heat(v), color: v ? '#0f172a' : '#E2E8F0', borderLeft: c + 1 === d ? '2px solid #B01229' : undefined }) }, v || '·')),
-            ce('td', { style: td({ background: heat(r.later) }) }, r.later || dash), ce('td', { style: td({ color: '#64748B' }) }, r.nod || dash))),
+            ...(() => { const w = r.ret - r.later - r.nod, p = x => (r.L > 0 && x > 0 ? (x / r.L * 100).toFixed(1) + '%' : dash);
+              return [ce('td', { key: 'w', style: td({ fontWeight: 700 }) }, w ? Nf(w) : dash), ce('td', { key: 'wp', style: td({ fontWeight: 700, color: '#B01229' }) }, p(w)),
+                      ce('td', { key: 'l', style: td({ fontWeight: 700 }) }, r.later ? Nf(r.later) : dash), ce('td', { key: 'lp', style: td({ fontWeight: 700, color: '#0F766E' }) }, p(r.later))]; })(),
+            ...r.cells.map((v, c) => ce('td', { key: c, style: td({ ...cw, background: heat(v), color: v ? '#0f172a' : '#E2E8F0', boxShadow: c + 1 === d ? 'inset 0 0 0 2px #B01229' : undefined, borderLeft: c === 0 ? '3px solid #fff' : undefined }) }, v || '\u00B7')),
+            ce('td', { style: td({ color: '#64748B' }) }, r.nod || dash))),
           ce('tr', { key: 'tot' },
             ce('td', { style: td({ textAlign: 'left', fontWeight: 700, position: 'sticky', left: 0, bottom: 0, background: '#E2E8F0', zIndex: 3 }) }, '∑ Total'),
             ce('td', { style: td({ fontWeight: 700, background: '#E2E8F0' }) }, Nf(mat.tL)), ce('td', { style: td({ fontWeight: 700, background: '#E2E8F0' }) }, Nf(mat.tRet)),
             ce('td', { style: td({ fontWeight: 700, background: '#E2E8F0' }) }, Nf(Math.max(0, mat.tL - mat.tRet))),
-            ce('td', { style: td({ fontWeight: 700, background: '#E2E8F0', color: '#B01229' }) }, mat.tL > 0 ? (mat.tRet / mat.tL * 100).toFixed(1) + '%' : dash),
-            ...mat.colTot.map((v, c) => ce('td', { key: c, style: td({ ...cw, fontWeight: 700, background: '#E2E8F0' }) }, v || dash)),
-            ce('td', { style: td({ fontWeight: 700, background: '#E2E8F0' }) }, mat.tLater || dash), ce('td', { style: td({ fontWeight: 700, background: '#E2E8F0' }) }, mat.tNod || dash)))));
+            ...(() => { const w = mat.tRet - mat.tLater - mat.tNod, p = x => (mat.tL > 0 && x > 0 ? (x / mat.tL * 100).toFixed(1) + '%' : dash), s = { fontWeight: 700, background: '#E2E8F0' };
+              return [ce('td', { key: 'w', style: td(s) }, w ? Nf(w) : dash), ce('td', { key: 'wp', style: td({ ...s, color: '#B01229' }) }, p(w)),
+                      ce('td', { key: 'l', style: td(s) }, mat.tLater ? Nf(mat.tLater) : dash), ce('td', { key: 'lp', style: td({ ...s, color: '#0F766E' }) }, p(mat.tLater))]; })(),
+            ...mat.colTot.map((v, c) => ce('td', { key: c, style: td({ ...cw, fontWeight: 700, background: '#E2E8F0', borderLeft: c === 0 ? '3px solid #fff' : undefined }) }, v || dash)),
+            ce('td', { style: td({ fontWeight: 700, background: '#E2E8F0' }) }, mat.tNod || dash)))));
   }
 
   const note = (t) => ce('div', { style: { padding: '7px 14px', background: '#EFF6FF', border: '1px solid #93C5FD', borderRadius: 8, fontSize: 12, color: '#1E3A8A', marginBottom: 12 } }, t);
@@ -4500,7 +4503,7 @@ const TatTab = React.memo(function TatTab({ data, filters, months, RT }) {
         ce('select', { value: sel, onChange: e => setSel(e.target.value), style: { fontSize: 12, padding: '4px 8px', borderRadius: 6, border: '1px solid #CBD5E1' } },
           ...opts.map(m => ce('option', { key: m, value: m }, m)))),
       ce('div', { className: 'fs-10', style: { color: '#64748B', marginBottom: 8 } },
-        'Each row is a lead-creation day, each column the calendar day the retail was attributed. The red edge marks the lead day itself (same-day retail). Later months and retails without a date are on the right.'),
+        'Each row is a lead-creation day, each column the calendar day the retail was attributed. The red box marks the lead day itself (same-day retail). Within month and Later months are shares of that day\u2019s leads; retails without a date are on the right.'),
       matrixEl));
 });
 
