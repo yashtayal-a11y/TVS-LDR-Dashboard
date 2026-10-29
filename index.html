@@ -443,7 +443,7 @@ function normalizeCities(data) {
     if (!mat || mat.length === 0) return;
     const acc = new Map();
     for (const row of mat) {
-      const newCityI = remap[row[cityCol]];
+      const newCityI = row[cityCol] >= 0 && row[cityCol] < remap.length ? remap[row[cityCol]] : row[cityCol];   // -1 / missing: leave as is
       // Build a string key from the remapped index columns
       let k = '';
       for (let c = 0; c < numKeys; c++) k += (c === cityCol ? newCityI : row[c]) + '|';
@@ -467,9 +467,14 @@ function normalizeCities(data) {
     ['u_cm',  0, 2], ['u_csm', 0, 3], ['u_cxm',0, 3],
     ['u_stcm',1, 3], ['u_cdm', 0, 3], ['u_cdsm',0,4],
     ['dl_sn', 0, 3],
-    ['cslt', 0, 4], ['u_cslt', 0, 4],
+    ['cslt', 0, 4], ['u_cslt', 0, 4], ['cxsm', 0, 4], ['u_cxsm', 0, 4],
+    ['pmx', 5, data.pmx_v >= 2 ? 9 : 8],      // [pmi, mi, si, sti, tti, cti, (dli,) create-month, retail-month, R, Rd, Rc]
+    ['ram', 6, 9],                            // [dday, uday, mi, si, tti, sti, cti, pmi, rt, n, ...]
+    ['snf', 2, data.snf_v === 2 ? 6 : 5],     // [status, src, city, model, lead-month, (lead type,) count]
   ];
-  for (const [mk, cc, nk] of CITY_MATS) remapMatrix(mk, cc, nk);
+  // No two spellings merged and nothing re-ordered: every index is unchanged, so the tables need no rewriting.
+  const identity = newCityArr.length === maps.city.length && remap.every((v, i) => v === i);
+  if (!identity) for (const [mk, cc, nk] of CITY_MATS) remapMatrix(mk, cc, nk);
 
   maps.city       = newCityArr;
   maps.city_state = newCityState;
