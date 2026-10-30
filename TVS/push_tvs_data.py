@@ -428,6 +428,9 @@ PURCHASED_MODEL_MAP = {
     # TVS NTORQ 150  (production raw value confirmed 2026-08-25)
     'TVS NTorq 150':   'TVS NTORQ 150',
     'TVS NTORQ 150':   'TVS NTORQ 150',
+    # confirmed in the 2026-10-30 dry run (Aug-Oct'26 retails that fell into Unknown)
+    'TVS Ntorq 150 TFT ABS OBDIIB': 'TVS NTORQ 150',
+    'TVS Ntorq 150 ABS OBDIIB':     'TVS NTORQ 150',
 
     # TVS Scooty Zest
     'TVS Zest': 'TVS Scooty Zest',
@@ -1129,8 +1132,9 @@ def normalize_purchased_model(pm):
     if 'JUPITER 125' in pu:                                       return 'TVS Jupiter 125'
     if ('JUPITER' in pu or 'JUPTR' in pu) and '125' not in pu:   return 'TVS Jupiter'
     if 'NTORQ' in pu and '150' not in pu:                        return 'TVS NTORQ 125'
+    if ('NTORQ' in pu or 'NTRQ' in pu) and '150' in pu:          return 'TVS NTORQ 150'
     if 'NTORQ' in pu or 'NTRQ' in pu:
-        _unk_mdl_reasons[pm] = 'NTORQ_150'
+        _unk_mdl_reasons[pm] = 'NTORQ_UNSPECIFIED'
         return 'Unknown'
     if 'IQUBE' in pu or 'IQUE' in pu:                            return 'TVS iQube'
     if 'RONIN' in pu:                                             return 'TVS Ronin'
