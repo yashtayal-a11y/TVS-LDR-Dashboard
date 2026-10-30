@@ -1098,6 +1098,7 @@ CANONICAL_TO_DISP_FAMILY: dict[str, str] = {
 _unk_mdl_reasons: dict = {}   # {stripped_raw: reason_str}
 _pm_unk_raw: dict = {}        # {sourceLeadId: raw purchasedModel text} for live retails that normalised to Unknown
 _pm_unk_detail: dict = {}     # {raw purchasedModel text: {'retails', 'by_month', 'by_src'}} filled by the aggregation loop
+_pm_unk_rows: list = []       # one row per Unknown retail (enquiry id + lead / retail details). Lead-level: written to a CSV that is uploaded to the PRIVATE repo only, never printed
 _unk_mdl_detail:  dict = {}   # {stripped_raw: {raw_repr, leads, rets, by_month, by_src}}
 
 def normalize_lead_model(mdl):
@@ -2487,6 +2488,8 @@ def build_payload(all_leads, retail_map):
                 _ur['retails'] += 1
                 _ur['by_month'][lm] = _ur['by_month'].get(lm, 0) + 1
                 _ur['by_src'][src] = _ur['by_src'].get(src, 0) + 1
+                _pm_unk_rows.append([lid, _pm_unk_raw.get(lid, '(history cache - raw text not kept)'), lm, src, lt, mdl, st, city,
+                                     dl if _dls is not None else '', retail_map[lid].get('rm', ''), rtype, retail_map[lid].get('ar') or ''])
             # ddp / ddup: retails by day and purchased model (the day tables above cannot carry it: a lead has no purchased model until it retails)
             _rtp = rtype.upper()
             for _pd, _pday in ((ddp, _dday), (ddup, _uday)):
@@ -2727,10 +2730,14 @@ def build_payload(all_leads, retail_map):
             print(f"  {repr(_rv):<46} {_why:<13} {_rd['retails']:>7,}   {_mo} | {_sr}", flush=True)
             _pu_rows.append({'raw': _rv, 'reason': _why, 'retails': _rd['retails'], 'by_month': _rd['by_month'], 'by_src': _rd['by_src']})
         try:
-            with open(Path(__file__).parent / 'unknown_purchased_model_diagnostic.json', 'w', encoding='utf-8') as _pf:
-                json.dump({'total_retails': _pu_tot, 'rows': _pu_rows}, _pf, indent=2, ensure_ascii=False)
+            import csv
+            with open(Path(__file__).parent / 'unknown_purchased_model_details.csv', 'w', encoding='utf-8-sig', newline='') as _pf:
+                _w = csv.writer(_pf)
+                _w.writerow(['enquiry_id (sourceLeadId)', 'raw purchasedModel', 'lead month', 'source', 'lead type', 'enquired model', 'state', 'city', 'dealer', 'retail month', 'call type', 'retail attribution day'])
+                _w.writerows(sorted(_pm_unk_rows, key=lambda r: (r[1], str(r[0]))))
+            print(f"  Details of all {len(_pm_unk_rows):,} Unknown retails written to TVS/unknown_purchased_model_details.csv (uploaded to the private repo, not printed)", flush=True)
         except Exception as _pe:
-            print(f"  WARNING: could not write unknown_purchased_model_diagnostic.json: {_pe}", flush=True)
+            print(f"  WARNING: could not write unknown_purchased_model_details.csv: {_pe}", flush=True)
     return payload
 
 # ─── Pipeline guard functions (defined here so every stage can call them) ─────

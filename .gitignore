@@ -21,6 +21,8 @@ data/tvs_payload_staging_*.json.gz
 data/tvs_payload_debug_*.json.gz
 
 # Local diagnostics
+TVS/unknown_purchased_model_details.csv
+TVS/unknown_purchased_model_diagnostic.json
 TVS/unknown_model_diagnostic.json
 extract_head.txt
 extract_utils.txt
