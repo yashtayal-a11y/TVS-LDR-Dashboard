@@ -1077,6 +1077,7 @@ CANONICAL_TO_DISP_FAMILY: dict[str, str] = {
     'TVS Apache RTR 200 4V':  'TVS Apache RTR 160 - 200 Family',
     'TVS Apache RR 310':      'TVS Apache RTR / RR 310 Family',
     'TVS Apache RTR 310':     'TVS Apache RTR / RR 310 Family',
+    'TVS Apache RTX':         'TVS Apache RTX',
     'TVS Jupiter':            'TVS Jupiter Family',
     'TVS Jupiter 125':        'TVS Jupiter Family',
     'TVS NTORQ 125':          'TVS NTORQ 125 - 150 Family',
@@ -1124,6 +1125,7 @@ def normalize_purchased_model(pm):
     # Keyword-based fallback for variants not in the explicit map
     if 'RR 310' in pu or 'RR310' in pu:                          return 'TVS Apache RR 310'
     if 'RTR 310' in pu or 'RTR310' in pu:                        return 'TVS Apache RTR 310'
+    if 'N597' in pu or ('RTX' in pu and 'APACHE' in pu):         return 'TVS Apache RTX'   # N597 = Apache RTX (confirmed 2026-10-30)
     if '200' in pu and ('4V' in pu or 'RTR' in pu):              return 'TVS Apache RTR 200 4V'
     if '180' in pu and 'APACHE' in pu:                            return 'TVS Apache RTR 180'
     if '160' in pu and '4V' in pu and ('APACHE' in pu or 'RTR' in pu): return 'TVS Apache RTR 160 4V'
