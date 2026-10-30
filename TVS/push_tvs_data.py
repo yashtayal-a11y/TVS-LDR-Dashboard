@@ -1132,10 +1132,8 @@ def normalize_purchased_model(pm):
     if 'JUPITER 125' in pu:                                       return 'TVS Jupiter 125'
     if ('JUPITER' in pu or 'JUPTR' in pu) and '125' not in pu:   return 'TVS Jupiter'
     if 'NTORQ' in pu and '150' not in pu:                        return 'TVS NTORQ 125'
-    if ('NTORQ' in pu or 'NTRQ' in pu) and '150' in pu:          return 'TVS NTORQ 150'
-    if 'NTORQ' in pu or 'NTRQ' in pu:
-        _unk_mdl_reasons[pm] = 'NTORQ_UNSPECIFIED'
-        return 'Unknown'
+    if 'NTRQ' in pu:                                             return 'TVS NTORQ 150'   # the "NTRQ" spelling is NTORQ 150 whatever number follows (confirmed 2026-10-30)
+    if 'NTORQ' in pu and '150' in pu:                            return 'TVS NTORQ 150'
     if 'IQUBE' in pu or 'IQUE' in pu:                            return 'TVS iQube'
     if 'RONIN' in pu:                                             return 'TVS Ronin'
     if 'RADEON' in pu:                                            return 'TVS Radeon'
