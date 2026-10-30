@@ -1092,6 +1092,8 @@ CANONICAL_TO_DISP_FAMILY: dict[str, str] = {
 # Populated by normalize_purchased_model (reason) and the main aggregation loop (context).
 # Cleared implicitly on each fresh process start; never written to production payload.
 _unk_mdl_reasons: dict = {}   # {stripped_raw: reason_str}
+_pm_unk_raw: dict = {}        # {sourceLeadId: raw purchasedModel text} for live retails that normalised to Unknown
+_pm_unk_detail: dict = {}     # {raw purchasedModel text: {'retails', 'by_month', 'by_src'}} filled by the aggregation loop
 _unk_mdl_detail:  dict = {}   # {stripped_raw: {raw_repr, leads, rets, by_month, by_src}}
 
 def normalize_lead_model(mdl):
@@ -1970,6 +1972,7 @@ def build_retail_map(retail_df, rd_map=None):
         if not lid: continue
         rm = parse_ym(row.get('performanceMonth', '') if has_pm else row.get('Retail_Attribution_Date', ''))
         pm = normalize_purchased_model(row.get('purchasedModel', ''))
+        if pm == 'Unknown': _pm_unk_raw[lid] = str(row.get('purchasedModel', '') or '').strip()
         if has_ct:
             _ct = str(row.get('Call Type', '') or '').strip()
             _ct_lower = _ct.lower()
@@ -2475,6 +2478,11 @@ def build_payload(all_leads, retail_map):
             raw_pm = retail_map[lid].get('pm', '') or ''
             pm  = normalize_purchased_model(raw_pm) or 'Unknown'
             pmi = ix(mdl_idx, mdl_arr, pm)        # canonical purchased model (for pmr)
+            if pm == 'Unknown':                   # diagnostic: which raw purchasedModel text ends up as Unknown
+                _ur = _pm_unk_detail.setdefault(_pm_unk_raw.get(lid, '<from history cache - raw text not kept>'), {'retails': 0, 'by_month': {}, 'by_src': {}})
+                _ur['retails'] += 1
+                _ur['by_month'][lm] = _ur['by_month'].get(lm, 0) + 1
+                _ur['by_src'][src] = _ur['by_src'].get(src, 0) + 1
             # ddp / ddup: retails by day and purchased model (the day tables above cannot carry it: a lead has no purchased model until it retails)
             _rtp = rtype.upper()
             for _pd, _pday in ((ddp, _dday), (ddup, _uday)):
@@ -2701,6 +2709,24 @@ def build_payload(all_leads, retail_map):
     _ddp_R = sum(v[0] for v in ddp.values()); _ddup_R = sum(v[0] for v in ddup.values()); _dd_R = sum(v[1] for v in dd.values())
     print(f"Day-on-Day x Purch. Model: ddp_rows={len(ddp):,} retails={_ddp_R:,}  ddup_rows={len(ddup):,} retails={_ddup_R:,}  "
           f"(dd retails={_dd_R:,}{'' if _ddp_R == _ddup_R == _dd_R else '  ** MISMATCH **'})", flush=True)
+    # Purchased-model Unknown diagnostic: raw purchasedModel text that normalize_purchased_model could not map (live retail rows only;
+    # entries that come from the frozen history cache hold the already-normalised name, so their raw text is not available).
+    _pu_tot = sum(v['retails'] for v in _pm_unk_detail.values())
+    print(f"\nPurchased model = Unknown: {_pu_tot:,} retails, {len(_pm_unk_detail):,} distinct raw value(s)", flush=True)
+    if _pm_unk_detail:
+        print(f"  {'raw purchasedModel (repr)':<46} {'reason':<13} {'retails':>7}   top months / sources", flush=True)
+        _pu_rows = []
+        for _rv, _rd in sorted(_pm_unk_detail.items(), key=lambda x: -x[1]['retails']):
+            _why = _unk_mdl_reasons.get(_rv, 'EMPTY' if not _rv else ('HISTORY' if _rv.startswith('<from history') else 'UNMAPPED'))
+            _mo = ', '.join(f"{k}={v}" for k, v in sorted(_rd['by_month'].items(), key=lambda x: -x[1])[:3])
+            _sr = ', '.join(f"{k}={v}" for k, v in sorted(_rd['by_src'].items(), key=lambda x: -x[1])[:3])
+            print(f"  {repr(_rv):<46} {_why:<13} {_rd['retails']:>7,}   {_mo} | {_sr}", flush=True)
+            _pu_rows.append({'raw': _rv, 'reason': _why, 'retails': _rd['retails'], 'by_month': _rd['by_month'], 'by_src': _rd['by_src']})
+        try:
+            with open(Path(__file__).parent / 'unknown_purchased_model_diagnostic.json', 'w', encoding='utf-8') as _pf:
+                json.dump({'total_retails': _pu_tot, 'rows': _pu_rows}, _pf, indent=2, ensure_ascii=False)
+        except Exception as _pe:
+            print(f"  WARNING: could not write unknown_purchased_model_diagnostic.json: {_pe}", flush=True)
     return payload
 
 # ─── Pipeline guard functions (defined here so every stage can call them) ─────
