@@ -619,7 +619,7 @@ function buildResolved(d, dx, filters, upd) {
   const up = v => String(v == null ? '' : v).trim().toUpperCase().replace(/^TVS\s+/, '');
   const disp = mp.mdl_disp || [];
   const pmIdx = new Set();
-  if (pmOn) { const want = new Set([...filters.purchasedModels].map(up)); mp.mdl.forEach((n, i) => { if (want.has(up(n)) || want.has(up(disp[i]))) pmIdx.add(i); }); }
+  if (pmOn) pmMatchIdx(filters.purchasedModels, mp.mdl, disp).forEach(i => pmIdx.add(i));
   const modelsOn = has(filters.models), statesOn = has(filters.states), ltOn = has(filters.leadTypes);
   const mdlIn = i => !modelsOn || filters.models.has(mp.mdl[i]);
 
@@ -709,15 +709,22 @@ function makeUnivFilter(filters) {
 /* Build PM-retail overlay maps from pmr rows for selected purchased-model names.
    pmr schema: [pmi, mi, si, li, R_all, R_dms, R_co]
    Returns { miSiLi, siLi, byLi } or null when no PM filter is active. */
-function resolvePmIdx(selPM, maps) {
+function pmMatchIdx(selPM, mdl, disp) {
+  // Purch. Model options are individual models (same names as the Model filter). A selection is matched to the model name;
+  // only a name that is not a model (an older saved Retail-Dispersion family name) falls back to the family match.
   const sel = new Set();
   if (!selPM || !selPM.size) return sel;
   const up = v => String(v == null ? '' : v).trim().toUpperCase().replace(/^TVS\s+/, '');
-  const want = new Set([...selPM].map(up));
-  const disp = maps.mdl_disp || [];
-  maps.mdl.forEach((name, i) => { if (want.has(up(name)) || want.has(up(disp[i]))) sel.add(i); });
+  const byName = new Map();
+  mdl.forEach((n, i) => { const k = up(n); if (!byName.has(k)) byName.set(k, []); byName.get(k).push(i); });
+  for (const s of selPM) {
+    const k = up(s);
+    if (byName.has(k)) byName.get(k).forEach(i => sel.add(i));
+    else mdl.forEach((n, i) => { if (up(disp[i]) === k) sel.add(i); });
+  }
   return sel;
 }
+function resolvePmIdx(selPM, maps) { return pmMatchIdx(selPM, maps.mdl, maps.mdl_disp || []); }
 
 function buildPmMaps(pmr, selPM, maps) {
   if (!selPM || !selPM.size || !pmr || !pmr.length) return null;
@@ -725,11 +732,7 @@ function buildPmMaps(pmr, selPM, maps) {
   // canonical model list (maps.mdl). Resolve each selection as a canonical name OR a family name
   // (maps.mdl_disp[i]), case-insensitively. A selection that resolves to nothing (e.g. "None")
   // yields an empty overlay => zero retails, instead of silently behaving like "All".
-  const up = v => String(v == null ? '' : v).trim().toUpperCase().replace(/^TVS\s+/, '');
-  const want = new Set([...selPM].map(up));
-  const disp = maps.mdl_disp || [];
-  const sel = new Set();
-  maps.mdl.forEach((name, i) => { if (want.has(up(name)) || want.has(up(disp[i]))) sel.add(i); });
+  const sel = pmMatchIdx(selPM, maps.mdl, maps.mdl_disp || []);
   const m3 = new Map(), m2 = new Map(), m1 = new Map();
   for (const row of pmr) {
     const [pmi, mi, si, li, R, Rd, Rc] = row;
@@ -2353,9 +2356,9 @@ const FilterBar = React.memo(function FilterBar({ data, filters, onFiltersChange
   const cities    = useMemo(() => maps.city ? [...new Set(maps.city)].sort() : [], [maps]);
   const purchasedModels = useMemo(() => {
     const pm = new Set();
-    if (tab === 'daily' || tab === 'tat') {   // Day on Day / TAT work at individual-model level (the daily file), not Retail-Dispersion families
+    if (tab !== 'dispersion') {   // individual models, named as in the Model filter (Retail Dispersion keeps its family names)
       for (const row of [...(data.pmr || []), ...(data.u_pmr || [])]) { const n = maps.mdl[row[0]]; if (n) pm.add(n); }
-      return [...pm].sort();
+      if (pm.size) return [...pm].sort();
     }
     const dlm = maps.dlm || maps.mdl;   // Retail Dispersion family names
     for (const row of (data.disp || [])) { const n = dlm[row[1]]; if (n) pm.add(n); }
@@ -3846,11 +3849,9 @@ function dailyPreds(dx, filters, maps) {
   const has = s => !!(s && s.size);
   let pmSel = null;
   if (has(filters.purchasedModels)) {
-    const up = v => String(v == null ? '' : v).trim().toUpperCase().replace(/^TVS\s+/, '');
-    const want = new Set([...filters.purchasedModels].map(up));
-    const disp = maps.mdl_disp || [];
+    const selNames = new Set([...resolvePmIdx(filters.purchasedModels, maps)].map(i => maps.mdl[i]));
     pmSel = new Set();
-    dx.maps.mdl.forEach((name, i) => { const j = maps.mdl.indexOf(name); if (want.has(up(name)) || (j >= 0 && want.has(up(disp[j])))) pmSel.add(i); });
+    dx.maps.mdl.forEach((name, i) => { if (selNames.has(name)) pmSel.add(i); });
   }
   return {
     pmSel,
@@ -5178,7 +5179,7 @@ const DispersionTab = React.memo(function DispersionTab({ data, filters, months,
     const allPM  = !filters.purchasedModels || filters.purchasedModels.size === 0;
     // Build pmi set for purchasedModels filter — index into dlm (Retail Dispersion families)
     const selPmi = allPM ? null : new Set(
-      [...filters.purchasedModels].map(pm => dlm.indexOf(pm)).filter(i => i >= 0)
+      [...filters.purchasedModels].flatMap(pm => { const j = maps.mdl.indexOf(pm); return [dlm.indexOf(pm), j >= 0 && maps.mdl_disp ? dlm.indexOf(maps.mdl_disp[j]) : -1]; }).filter(i => i >= 0)
     );
 
     const map = new Map(); // month → Map(ei → Map(pi → count))
@@ -6102,6 +6103,17 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
     setTplActive(t.name); setTplOpen(false); setTplNote('');
   }
 
+  // Back to the plain default pivot: Model x Month, Leads, no filters, no date range.
+  function resetPivot() {
+    setRowDims(['mdl']); setColDims(['lm']); setMetricsSel(['leads']);
+    setSortBy('__total__'); setSortDir('desc'); setSortM(null); setTopN(20);
+    setCollapsed(new Set()); setPctCols(new Set());
+    setDFrom(''); setDTo('');
+    onFiltersChange({ months: new Set(), leadTypes: new Set(), sources: new Set(), models: new Set(), states: new Set(), cities: new Set(), purchasedModels: new Set() });
+    setRT('all');
+    setTplActive(''); setTplOpen(false); setTplNote('');
+  }
+
   function deleteTemplate(t) {
     if (!window.confirm('Delete template "' + t.name + '"?')) return;
     const next = tpls.filter(x => x.name !== t.name);
@@ -6383,6 +6395,8 @@ const PivotTab = React.memo(function PivotTab({ data, filters, months, RT, leads
                 tplSync === 'loading' ? 'Loading your templates\u2026' : 'Could not reach your account \u2014 showing the copy saved in this browser.'))
           )
         ),
+        tplActive && ce('button', { onClick: resetPivot, title: 'Clear the template: back to Model \u00D7 Month with no filters',
+          style:{ ...selSt, fontWeight:600, whiteSpace:'nowrap', color:'#B01229', borderColor:'#B01229' } }, '\u21BA Reset pivot'),
         !unsupported && !noData && !awaitingPipeline && ce(ExportBtn, { onClick: handleExport })
       ),
     ),
