@@ -4258,6 +4258,7 @@ const TatTab = React.memo(function TatTab({ data, filters, months, RT }) {
   const opts = useMemo(() => (months || []).filter(m => m && m !== '\x00'), [months]);
   const [sel, setSel] = useState(opts[0] || '');
   useEffect(() => { if (opts.length && !opts.includes(sel)) setSel(opts[0]); }, [opts]);
+  const [showDays, setShowDays] = useState(false);   // day-by-day grid: the retail-day columns start collapsed
 
   const hasPmx = !!(data.pmx && data.pmx.length);
   const cityOn = has(filters.cities);
@@ -4474,7 +4475,7 @@ const TatTab = React.memo(function TatTab({ data, filters, months, RT }) {
         ce('thead', null, ce('tr', null,
           ce('th', { style: fh(0, { textAlign: 'left' }) }, 'Lead day'), ce('th', { style: fh(1) }, 'Leads'), ce('th', { style: fh(2) }, 'Retailed'),
           ce('th', { style: fh(3) }, 'Within month'), ce('th', { style: fh(4) }, '% within'),
-          ...Array.from({ length: mat.dim }, (_, c) => ce('th', { key: c, style: hd({ background: '#0F766E', minWidth: 34, padding: '7px 3px' }) }, String(c + 1))),
+          ...(showDays ? Array.from({ length: mat.dim }, (_, c) => ce('th', { key: c, style: hd({ background: '#0F766E', minWidth: 34, padding: '7px 3px' }) }, String(c + 1))) : []),
           ce('th', { style: hd({ background: '#0F766E' }) }, 'Later months'), ce('th', { style: hd({ background: '#0F766E' }) }, '% later'),
           ce('th', { style: hd({ background: '#475569' }) }, 'No retail date'))),
         ce('tbody', null,
@@ -4482,14 +4483,14 @@ const TatTab = React.memo(function TatTab({ data, filters, months, RT }) {
             ce('td', { style: td(fz(0, '#F1F5F9', { textAlign: 'left', fontWeight: 700 })) }, d === 0 ? 'No day' : d + ' ' + MONTHS[mat.ym % 100 - 1]),
             ce('td', { style: td(fz(1, '#fff', { fontWeight: 700 })) }, r.L ? Nf(r.L) : dash), ce('td', { style: td(fz(2, '#fff', { fontWeight: 700 })) }, r.ret ? Nf(r.ret) : dash),
             ce('td', { style: td(fz(3, '#fff', { fontWeight: 700 })) }, w ? Nf(w) : dash), ce('td', { style: td(fz(4, '#fff', { fontWeight: 700, color: '#B01229' })) }, pc(w, r.L)),
-            ...r.cells.map((v, c) => ce('td', { key: c, style: td({ ...cw, background: v ? heat(v) : (c + 1 === d ? '#CBD5E1' : undefined), color: v ? '#0f172a' : '#E2E8F0', fontWeight: c + 1 === d ? 700 : undefined }) }, v || '·')),
+            ...(showDays ? r.cells.map((v, c) => ce('td', { key: c, style: td({ ...cw, background: v ? heat(v) : (c + 1 === d ? '#CBD5E1' : undefined), color: v ? '#0f172a' : '#E2E8F0', fontWeight: c + 1 === d ? 700 : undefined }) }, v || '·')) : []),
             ce('td', { style: td({ fontWeight: 700 }) }, r.later ? Nf(r.later) : dash), ce('td', { style: td({ fontWeight: 700, color: '#0F766E' }) }, pc(r.later, r.L)),
             ce('td', { style: td({ color: '#64748B' }) }, r.nod || dash)); }),
           (() => { const w = mat.tRet - mat.tLater - mat.tNod; return ce('tr', { key: 'tot' },
             ce('td', { style: td(fz(0, TOT, { textAlign: 'left', fontWeight: 700, bottom: 0, zIndex: 5 })) }, '∑ Total'),
             ce('td', { style: td(fz(1, TOT, { fontWeight: 700, bottom: 0, zIndex: 5 })) }, Nf(mat.tL)), ce('td', { style: td(fz(2, TOT, { fontWeight: 700, bottom: 0, zIndex: 5 })) }, Nf(mat.tRet)),
             ce('td', { style: td(fz(3, TOT, { fontWeight: 700, bottom: 0, zIndex: 5 })) }, w ? Nf(w) : dash), ce('td', { style: td(fz(4, TOT, { fontWeight: 700, bottom: 0, zIndex: 5, color: '#B01229' })) }, pc(w, mat.tL)),
-            ...mat.colTot.map((v, c) => ce('td', { key: c, style: td({ ...cw, ...tb }) }, v || dash)),
+            ...(showDays ? mat.colTot.map((v, c) => ce('td', { key: c, style: td({ ...cw, ...tb }) }, v || dash)) : []),
             ce('td', { style: td(tb) }, mat.tLater ? Nf(mat.tLater) : dash), ce('td', { style: td({ ...tb, color: '#0F766E' }) }, pc(mat.tLater, mat.tL)),
             ce('td', { style: td(tb) }, mat.tNod || dash)); })())));
   }
@@ -4512,6 +4513,8 @@ const TatTab = React.memo(function TatTab({ data, filters, months, RT }) {
     ce('div', { className: 'card', style: { padding: '16px 18px', marginBottom: 14, borderTop: '3px solid #0F766E' } },
       ce('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6, flexWrap: 'wrap' } },
         ce('div', { className: 'section-title', style: { marginBottom: 0, flex: 1 } }, 'Day by day: lead day (rows) x retail day (columns)'),
+        mat && !mat.na && ce('button', { className: 'btn btn-secondary', style: { fontSize: 11 }, onClick: () => setShowDays(v => !v),
+          title: 'Show or hide the retail-day columns (1 to ' + mat.dim + ')' }, (showDays ? '\u25BE Hide' : '\u25B8 Show') + ' day columns (1\u2013' + mat.dim + ')'),
         ce('select', { value: sel, onChange: e => setSel(e.target.value), style: { fontSize: 12, padding: '4px 8px', borderRadius: 6, border: '1px solid #CBD5E1' } },
           ...opts.map(m => ce('option', { key: m, value: m }, m)))),
       ce('div', { className: 'fs-10', style: { color: '#64748B', marginBottom: 8 } },
